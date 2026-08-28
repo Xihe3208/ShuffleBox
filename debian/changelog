@@ -1,0 +1,7 @@
+shufflebox (1.1.0-1) unstable; urgency=medium
+
+  * Rename the application, service, package, paths and CLI to ShuffleBox.
+  * Add safe one-time migration for the legacy installation paths.
+  * Keep Debian dependencies declarative and preserve runtime data.
+
+ -- ShuffleBox Maintainers <shufflebox@example.invalid>  Fri, 28 Aug 2026 16:00:00 +0000

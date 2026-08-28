@@ -1,0 +1,148 @@
+#!/bin/sh
+set -eu
+
+SERVICE=shufflebox.service
+CONFIG_DIR=/etc/shufflebox
+CONFIG_FILE=$CONFIG_DIR/shufflebox.env
+APP_DIR=/opt/ShuffleBox
+VERSION_FILE=$APP_DIR/package.json
+
+usage() {
+    cat <<'EOF'
+Usage: shufflebox <command>
+
+Service commands:
+  status                 Show the ShuffleBox service status
+  start                  Start ShuffleBox
+  stop                   Stop ShuffleBox
+  restart                Restart ShuffleBox
+  enable                 Enable start at boot (does not start now)
+  disable                Disable start at boot
+  active                 Print active, inactive, or failed
+
+Configuration:
+  admin-settings true    Show the administrator settings entry in the Web UI
+  admin-settings false   Hide the administrator settings entry in the Web UI
+
+Other:
+  -h, --help             Show this help
+  -v, --version          Show the installed ShuffleBox version
+EOF
+}
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "This command requires root privileges." >&2
+        exit 1
+    fi
+}
+
+version() {
+    if [ ! -r "$VERSION_FILE" ]; then
+        echo "ShuffleBox version is unavailable." >&2
+        exit 1
+    fi
+    installed_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" | head -n 1)
+    if [ -z "$installed_version" ]; then
+        echo "ShuffleBox version is unavailable." >&2
+        exit 1
+    fi
+    printf 'ShuffleBox %s\n' "$installed_version"
+}
+
+write_admin_setting() {
+    value=$1
+    old_mode=640
+    old_owner=root:root
+    if [ -e "$CONFIG_FILE" ]; then
+        if [ ! -f "$CONFIG_FILE" ]; then
+            echo "ShuffleBox configuration is not a regular file: $CONFIG_FILE" >&2
+            exit 1
+        fi
+        old_mode=$(stat -c '%a' "$CONFIG_FILE")
+        old_owner=$(stat -c '%u:%g' "$CONFIG_FILE")
+    else
+        install -d -m 0755 "$CONFIG_DIR"
+    fi
+
+    umask 077
+    temp_file=$(mktemp "$CONFIG_DIR/.shufflebox.env.XXXXXX")
+    cleanup() {
+        rm -f "$temp_file"
+    }
+    trap cleanup EXIT HUP INT TERM
+
+    if [ -f "$CONFIG_FILE" ]; then
+        awk -v value="$value" '
+            BEGIN { replaced = 0 }
+            /^[[:space:]]*(SHUFFLEBOX_ADMIN_SETTINGS|EMBYX_ADMIN_SETTINGS)[[:space:]]*=/ {
+                if (!replaced) {
+                    print "SHUFFLEBOX_ADMIN_SETTINGS=" value
+                    replaced = 1
+                }
+                next
+            }
+            { print }
+            END {
+                if (!replaced) print "SHUFFLEBOX_ADMIN_SETTINGS=" value
+            }
+        ' "$CONFIG_FILE" > "$temp_file"
+    else
+        printf '%s\n' '# ShuffleBox service settings.' > "$temp_file"
+        printf 'SHUFFLEBOX_ADMIN_SETTINGS=%s\n' "$value" >> "$temp_file"
+    fi
+
+    chown "$old_owner" "$temp_file"
+    chmod "$old_mode" "$temp_file"
+    mv -f "$temp_file" "$CONFIG_FILE"
+    trap - EXIT HUP INT TERM
+}
+
+if [ "$#" -eq 0 ]; then
+    usage
+    exit 2
+fi
+
+case "$1" in
+    -h|--help)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        usage
+        ;;
+    -v|--version)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        version
+        ;;
+    status)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        exec systemctl status "$SERVICE" --no-pager
+        ;;
+    active)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        current_state=$(systemctl is-active "$SERVICE" 2>/dev/null || true)
+        case "$current_state" in
+            active) printf '%s\n' active; exit 0 ;;
+            failed) printf '%s\n' failed; exit 3 ;;
+            *) printf '%s\n' inactive; exit 3 ;;
+        esac
+        ;;
+    start|stop|restart|enable|disable)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        require_root
+        exec systemctl "$1" "$SERVICE"
+        ;;
+    admin-settings)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        case "$2" in
+            true|false) ;;
+            *) echo "admin-settings accepts only true or false." >&2; exit 2 ;;
+        esac
+        require_root
+        write_admin_setting "$2"
+        exec systemctl restart "$SERVICE"
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

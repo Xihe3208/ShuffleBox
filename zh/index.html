@@ -1,0 +1,4574 @@
+<!--
+  ShuffleBox - 短视频风格 Emby 播放器
+-->
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="theme-color" content="#000000" />
+    <meta name="referrer" content="no-referrer" />
+
+    <link rel="manifest" href="manifest.json" />
+
+    <link rel="icon" type="image/png" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+
+    <title>ShuffleBox</title>
+    <script src="https://cdn.tailwindcss.com" data-cfasync="false"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script data-cfasync="false">
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: "#52B54B", // Emby绿
+              secondary: "#EE3152", // 抖音红
+            },
+            fontFamily: {
+              sans: ["PingFang SC", "Helvetica Neue", "Arial", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+    <style type="text/tailwindcss">
+      @layer utilities {
+        /* 视频全屏样式 - 移除硬编码的 object-cover 给 JS 控制 */
+        .video-fullscreen {
+          @apply w-full h-full absolute inset-0 z-10;
+        }
+
+        /* 滑动容器 */
+        .slide-container {
+          @apply relative w-screen overflow-hidden bg-black;
+          height: 100dvh;
+        }
+        @media (display-mode: standalone) {
+          .slide-container {
+            height: 100vh;
+          }
+        }
+
+        /* 单个视频卡片 */
+        .slide-item {
+          @apply relative w-full h-full shrink-0 z-10 overflow-hidden;
+          scroll-snap-align: start;
+        }
+
+        .feed-scrollbar-hidden {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        .feed-scrollbar-hidden::-webkit-scrollbar {
+          display: none;
+        }
+
+        /* 播放/暂停按钮动画 */
+
+        .play-pause-btn {
+          @apply absolute top-1/2 left-1/2 w-16 h-16 rounded-full flex items-center justify-center z-20 opacity-0 pointer-events-none transition-all duration-200 ease-out bg-black/30;
+          transform: translate(-50%, -50%) scale(1.5);
+        }
+        .play-pause-btn.paused {
+          @apply opacity-100;
+          transform: translate(-50%, -50%) scale(1.5);
+        }
+        .play-pause-btn i {
+          @apply text-2xl text-white;
+        }
+
+        /* 连播模式/清屏模式逻辑 */
+        .interface-hidden .bottom-info,
+        .interface-hidden .bottom-nav,
+        .interface-hidden .right-toolbar,
+        .interface-hidden #fullscreenBtn,
+        .interface-hidden #deleteBtn {
+          @apply opacity-0 pointer-events-none transition-opacity duration-300;
+        }
+
+        /* 格子视图下的特殊“清屏”：保留底部栏，隐藏播放器相关 UI */
+        .grid-active .bottom-info,
+        .grid-active .right-toolbar,
+        .grid-active #fullscreenBtn,
+        .grid-active #deleteBtn {
+          @apply opacity-0 pointer-events-none transition-opacity duration-300;
+        }
+
+        /* 遥控器与键盘焦点高亮 */
+        .focusable-item:focus {
+          @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-black z-20;
+        }
+
+        /* “我的”页面层级过渡 */
+        .profile-layer {
+          @apply fixed top-0 left-0 w-full h-full z-[60] translate-y-full transition-transform duration-300 ease-in-out;
+        }
+        .profile-layer.active {
+          @apply translate-y-0;
+        }
+        .tag-drawer {
+          @apply fixed top-0 right-0 h-full w-full max-w-sm z-[70] translate-x-full transition-transform duration-300 ease-in-out bg-black/95 border-l border-gray-700/50 shadow-2xl;
+        }
+        .tag-drawer.active { @apply translate-x-0; }
+
+        /* 进度条 */
+        .progress-line {
+          @apply h-full bg-white transition-[width] duration-[250ms] ease-linear;
+        }
+
+        /* MD3 & Liquid Glass: 底部导航反馈 */
+        .nav-btn {
+          @apply relative flex flex-col items-center justify-center w-1/4 h-full cursor-pointer transition-colors duration-300 z-10;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .modal-scrollbar-hidden { -ms-overflow-style: none; scrollbar-width: none; }
+        .modal-scrollbar-hidden::-webkit-scrollbar { display: none; }
+        .drawer-dismiss {
+          @apply absolute text-gray-400 right-5 w-10 h-10 flex items-center justify-center rounded-full border border-transparent transition-all duration-200;
+        }
+        .drawer-dismiss:focus { @apply outline-none ring-0; }
+        @media (hover: hover) and (pointer: fine) {
+          .drawer-dismiss:hover { @apply border-primary text-gray-200; }
+        }
+        .nav-btn::before {
+          content: "";
+          @apply absolute top-1/2 left-1/2 w-[3.5rem] h-8 rounded-full bg-primary/30 opacity-0 pointer-events-none transition-all duration-500 ease-out z-[-1];
+          transform: translate(-50%, -50%) scale(0.5);
+          backdrop-filter: blur(8px);
+        }
+        .nav-btn.nav-clicked::before {
+          @apply opacity-100;
+          transform: translate(-50%, -50%) scale(1);
+        }
+        .nav-btn.nav-clicked {
+          color: theme("colors.primary") !important;
+        }
+        .nav-btn.nav-clicked svg {
+          filter: drop-shadow(0 0 6px rgba(82, 181, 75, 0.6));
+        }
+      }
+    </style>
+  </head>
+
+  <body
+    class="bg-black text-white overflow-hidden font-sans select-none overscroll-none"
+  >
+    <div id="app" class="slide-container">
+      <div id="videoContainer" class="relative w-full h-full"></div>
+
+      <div
+        id="clickToPlayOverlay"
+        class="absolute inset-0 z-50 flex items-center justify-center bg-black/40 cursor-pointer"
+        style="display: none"
+      >
+        <div class="text-center">
+          <div
+            class="w-20 h-20 bg-black/50 rounded-full flex items-center justify-center animate-pulse mx-auto"
+          >
+            <i data-lucide="play" class="text-white text-3xl"></i>
+          </div>
+          <p class="text-white text-lg mt-4 font-medium">点击开始播放</p>
+        </div>
+      </div>
+
+      <div
+        class="right-toolbar absolute right-4 bottom-40 flex flex-col items-center space-y-6 z-30 transition-opacity duration-300"
+      >
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="favoriteBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="heart"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="tagBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="tags"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="muteBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="volume-2"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- 左上角管理删除按钮，微调顶部距离，例如 1rem (16px) 或 10px -->
+      <div
+        class="absolute top-[calc(10px+env(safe-area-inset-top))] left-4 z-30 transition-opacity duration-300"
+        id="deleteBtn"
+      >
+        <div
+          class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"
+        >
+          <i
+            data-lucide="trash-2"
+            class="stroke-white w-5 h-5 drop-shadow-md"
+          ></i>
+        </div>
+      </div>
+
+      <!-- 右上角全屏按钮，微调顶部距离，例如 1rem (16px) 或 10px -->
+      <div
+        class="absolute top-[calc(10px+env(safe-area-inset-top))] right-4 z-30 transition-opacity duration-300"
+        id="fullscreenBtn"
+      >
+        <div
+          class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"
+        >
+          <i
+            data-lucide="maximize"
+            class="stroke-white w-5 h-5 drop-shadow-md"
+          ></i>
+        </div>
+      </div>
+
+      <div
+        id="mediaInfoModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 hidden backdrop-blur-sm transition-opacity duration-300"
+      >
+        <div
+          class="bg-black/50 rounded-2xl p-6 w-[85%] max-w-sm max-h-[80vh] overflow-y-auto border border-gray-700/50 shadow-2xl backdrop-blur-sm"
+        >
+          <h3 class="text-white text-lg font-bold mb-4 text-center">
+            流媒体信息
+          </h3>
+          <div id="mediaInfoContent" class="text-sm text-gray-300">
+            <div class="flex justify-center py-4">
+              <i
+                data-lucide="loader-2"
+                class="w-6 h-6 animate-spin text-gray-500"
+              ></i>
+            </div>
+          </div>
+          <button
+            id="closeMediaInfoBtn"
+            class="w-full mt-6 bg-gray-800/80 border border-gray-700/50 text-gray-200 py-2.5 rounded-lg font-medium hover:bg-gray-700 active:scale-95 transition-all"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+
+      <div
+        id="deleteConfirmModal"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 hidden backdrop-blur-sm transition-opacity duration-300"
+      >
+        <div
+          class="bg-black/50 rounded-2xl p-6 w-[85%] max-w-sm border border-gray-700/50 shadow-2xl backdrop-blur-sm text-center"
+        >
+          <div
+            class="w-14 h-14 bg-secondary/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-secondary/20"
+          >
+            <i data-lucide="trash-2" class="text-secondary w-7 h-7"></i>
+          </div>
+          <h3 class="text-white text-lg font-bold mb-2">删除媒体</h3>
+          <p
+            class="text-secondary text-xs font-semibold px-4 mb-4 leading-relaxed"
+          >
+            ⚠️ 警告：将从 Emby 永久删除源文件！
+          </p>
+          <div
+            class="bg-gray-800/40 rounded-lg p-3 mb-6 border border-gray-700/30"
+          >
+            <p
+              id="deleteFileName"
+              class="text-gray-300 text-xs break-all opacity-80"
+            ></p>
+          </div>
+          <div class="flex space-x-3">
+            <button
+              id="cancelDeleteBtn"
+              class="flex-1 bg-gray-800/80 border border-gray-700/50 text-gray-300 py-2.5 rounded-lg font-medium active:scale-95 transition-all"
+            >
+              😍女菩萨留步
+            </button>
+            <button
+              id="confirmDeleteBtn"
+              class="flex-1 bg-secondary text-white py-2.5 rounded-lg font-bold active:opacity-90 shadow-lg shadow-secondary/20 transition-all"
+            >
+              🚬妖孽走开
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="bottom-info absolute bottom-20 left-4 right-4 z-20 transition-opacity duration-300 pointer-events-none"
+      >
+        <div
+          id="videoInfoArea"
+          class="mb-3 pointer-events-auto w-[75%] pr-4 cursor-pointer active:opacity-75 transition-opacity"
+        >
+          <h3
+            id="videoTitle"
+            class="text-white text-lg font-medium mb-1 drop-shadow-md truncate"
+          >
+            正在初始化...
+          </h3>
+          <p
+            id="videoDescription"
+            class="text-gray-200 text-sm line-clamp-2 drop-shadow-md opacity-90"
+          >
+            请点击右下角“我的”进行服务器配置
+          </p>
+        </div>
+
+        <div
+          class="relative h-1 bg-white/30 cursor-pointer pointer-events-auto mb-1"
+          id="progressBarContainer"
+        >
+          <div id="progressLine" class="progress-line w-0"></div>
+        </div>
+
+        <div class="flex justify-between text-xs text-gray-300 drop-shadow">
+          <span id="currentTime">00:00</span>
+          <span id="totalTime">00:00</span>
+        </div>
+      </div>
+
+      <div
+        class="bottom-nav absolute bottom-0 left-0 right-0 bg-black/50 backdrop-blur-sm z-30 transition-opacity duration-300 pb-2 pt-1"
+      >
+        <div class="flex justify-around items-center h-12">
+          <div id="viewModeBtn" class="nav-btn text-gray-400">
+            <i data-lucide="layout-grid" class="stroke-current w-5 h-5"></i>
+          </div>
+          <button type="button" id="playModeBtn" class="nav-btn text-gray-400" aria-label="切换播放模式">
+            <i data-lucide="repeat" class="stroke-current w-5 h-5"></i>
+          </button>
+          <div id="libraryBtn" class="nav-btn text-gray-400">
+            <i data-lucide="folder-open" class="stroke-current w-5 h-5"></i>
+          </div>
+          <div id="myBtn" class="nav-btn text-gray-400">
+            <i data-lucide="user-round" class="stroke-current w-5 h-5"></i>
+          </div>
+        </div>
+      </div>
+
+      <div id="profilePage" class="profile-layer text-white">
+        <div
+          class="absolute top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 left-0 w-full bg-black/50 backdrop-blur-sm pointer-events-none -z-10"
+        ></div>
+
+        <div
+          class="absolute top-0 left-0 w-full h-[calc(3.5rem+env(safe-area-inset-top))] border-b border-gray-700/50 bg-black/50 backdrop-blur-sm z-10 pt-[env(safe-area-inset-top)]"
+        >
+          <div class="flex items-center justify-center h-14 px-4 relative">
+            <span class="font-bold text-lg">个人中心</span>
+            <!-- 右上角向下箭头，已将原来的 right-4 改为了 right-5 稍微左移。如感到偏右可改 right-5.5 / right-6 寻找舒适点 -->
+            <button
+              id="closeProfileBtn"
+              class="drawer-dismiss active:text-gray-300"
+            >
+              <i data-lucide="chevron-down" class="w-6 h-6"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-scrollbar-hidden absolute inset-0 overflow-y-auto overflow-x-hidden z-0">
+          <div
+            class="pt-[calc(3.5rem+env(safe-area-inset-top))] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+          >
+            <div class="mb-5 mt-5">
+              <h2 class="hidden text-primary font-bold text-sm mb-5 flex items-center">
+                <i data-lucide="server" class="w-4 h-4 mr-2"></i>SMB 媒体源配置
+              </h2>
+              <div
+                class="space-y-4 bg-gray-800/40 p-4 rounded-lg border border-gray-700/50"
+              >
+                <div id="configShareField" class="hidden">
+                  <label class="text-gray-400 text-xs block mb-1.5"
+                    >SMB 共享地址</label
+                  >
+                  <input
+                    type="text"
+                    id="configServer"
+                    placeholder="//192.168.1.10/videos"
+                    class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                  />
+                </div>
+                <div id="configCredentialsField" class="grid grid-cols-2 gap-2 hidden">
+                  <div>
+                    <label class="text-gray-400 text-xs block mb-1.5"
+                      >用户名</label
+                    >
+                    <input
+                      type="text"
+                      id="configUser"
+                      placeholder="Username"
+                      class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-gray-400 text-xs block mb-1.5"
+                      >密码</label
+                    >
+                    <input
+                      type="password"
+                      id="configPwd"
+                      placeholder="Password"
+                      class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                    />
+                  </div>
+                </div>
+                <div
+                  id="rowStatic"
+                  hidden
+                  tabindex="0"
+                  class="hidden focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configStatic').click();"
+                >
+                  <label
+                    for="configStatic"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >访客访问（无需账号）</label
+                  >
+                  <input
+                    type="checkbox"
+                    id="configStatic"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div
+                  id="rowAutoplay"
+                  tabindex="0"
+                  class="focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configAutoplay').click();"
+                >
+                  <label
+                    for="configAutoplay"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >自动连播
+                  </label>
+                  <input
+                    type="checkbox"
+                    id="configAutoplay"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                    checked
+                  />
+                </div>
+                <div
+                  id="rowShortDrama"
+                  tabindex="0"
+                  class="focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configShortDrama').click();"
+                >
+                  <label
+                    for="configShortDrama"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >短剧模式
+                  </label>
+                  <input
+                    type="checkbox"
+                    id="configShortDrama"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div
+                  id="rowDeleteMode"
+                  hidden
+                  tabindex="0"
+                  class="hidden focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configDeleteMode').click();"
+                >
+                  <label
+                    for="configDeleteMode"
+                    class="text-yellow-500/90 text-sm cursor-pointer flex-1 font-medium"
+                    >允许删除媒体 ⚠️
+                  </label>
+                  <input
+                    type="checkbox"
+                    id="configDeleteMode"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div class="flex space-x-3 pt-2">
+                  <button
+                    id="resetConfigBtn"
+                    hidden
+                    class="hidden flex-1 bg-gray-700 hover:bg-gray-600 text-white text-sm py-3 rounded-lg active:scale-95 transition-transform focusable-item"
+                  >
+                    清除挂载状态
+                  </button>
+                  <button
+                    id="saveConfigBtn"
+                    class="flex-1 bg-primary hover:bg-primary/90 text-white text-sm py-3 rounded-lg font-bold active:opacity-80 shadow-lg shadow-primary/20 focusable-item"
+                  >
+                    保存
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="border-t border-dashed border-gray-600 w-full mt-5 mb-5"
+            ></div>
+
+            <div>
+              <h2 class="hidden text-primary font-bold text-sm mb-5 flex items-center">
+                <i data-lucide="badge-info" class="w-4 h-4 mr-2"></i>关于项目
+              </h2>
+              <div
+                class="bg-gray-800/40 p-5 rounded-xl border border-gray-700/50 space-y-5 text-sm text-gray-300 leading-relaxed"
+              >
+                <div class="hidden flex items-center">
+                  <h3 class="text-white font-bold text-2xl tracking-tight">
+                    📱 ShuffleBox
+                  </h3>
+                  <span
+                    class="ml-2 px-2 py-0.5 bg-primary/20 text-primary text-xs font-bold rounded-full border border-primary/30"
+                    >v1.1</span
+                  >
+                </div>
+
+                <div class="hidden">
+                  <p class="text-gray-300">
+                    👋 Hi～我叫<a
+                      href="https://juneix.github.io"
+                      target="_blank"
+                      class="text-primary hover:underline"
+                      >@谢週五</a
+                    >，ShuffleBox 是一款专为 Emby / Jellyfin 打造的 Web
+                    原生应用，完美复刻抖音·短视频沉浸式交互，让你的私人媒体库焕发全新的刷片体验。🎉
+                  </p>
+                </div>
+
+                <div
+                  class="hidden text-yellow-500/90 text-xs bg-yellow-500/10 p-3 rounded-lg border border-yellow-500/20"
+                >
+                  <i data-lucide="shield-check" class="w-3 h-3 mr-1 inline"></i>
+                  数据全程保存在本地，完全免费。
+                </div>
+
+                <div class="hidden">
+                  <h4 class="text-gray-300">播放性能</h4>
+                  <ul
+                    class="list-disc list-inside space-y-1 text-gray-400 text-xs mt-2"
+                  >
+                    <li>原生 HTML5 播放器，新设备体验最佳</li>
+                    <li>
+                      老设备需服务器转码，<del>不如放到**上回收(没打钱</del> 😂
+                    </li>
+                  </ul>
+                  <div
+                    class="bg-black/40 rounded-lg overflow-hidden border border-gray-700/50 mt-3"
+                  >
+                    <table
+                      class="w-full text-center text-[11px] leading-tight border-collapse"
+                    >
+                      <thead class="bg-gray-700/30 text-gray-400">
+                        <tr>
+                          <th
+                            class="px-2 py-1.5 border-r border-gray-700/50 font-medium"
+                          >
+                            设备
+                          </th>
+                          <th
+                            class="px-2 py-1.5 border-r border-gray-700/50 font-medium"
+                          >
+                            HEVC 硬解
+                          </th>
+                          <th class="px-2 py-1.5 font-medium">AV1 硬解</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-gray-700/50 text-gray-400">
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            苹果
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            A9 (2015) / M1
+                          </td>
+                          <td class="px-2 py-1.5">A17 Pro (2023) / M3</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            安卓
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            千元机 (2016)
+                          </td>
+                          <td class="px-2 py-1.5">千元机 (2024)</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            PC
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            6～8 代酷睿·核显
+                          </td>
+                          <td class="px-2 py-1.5">11 代酷睿·核显</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">使用技巧</h4>
+                  <ul
+                    class="list-disc list-inside space-y-1 text-gray-400 text-xs mt-2"
+                  >
+                    <li>入库更快：媒体库类型选「家庭视频」</li>
+                    <li>加载更顺：每个媒体库 < 1000 个视频</li>
+                    <li>管理更爽：使用多个媒体库和播放列表</li>
+                    <li>PWA 应用：添加到主屏幕/作为应用安装</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">快捷键指南</h4>
+                  <div
+                    class="bg-black/40 rounded-lg overflow-hidden border border-gray-700/50 mt-2"
+                  >
+                    <table class="w-full text-center text-[11px] leading-tight">
+                      <thead class="bg-gray-700/30 text-gray-400">
+                        <tr>
+                          <th
+                            class="px-3 py-1.5 font-medium border-r border-gray-700/50"
+                          >
+                            按键
+                          </th>
+                          <th class="px-3 py-1.5 font-medium">功能</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-gray-700/50 text-gray-400">
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            W / S / ↑ / ↓
+                          </td>
+                          <td class="px-3 py-1.5">上一个 / 下一个视频</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            A / D / ← / →
+                          </td>
+                          <td class="px-3 py-1.5">快退 / 快进 15 秒</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            Space / 单击 OK
+                          </td>
+                          <td class="px-3 py-1.5">暂停 / 播放</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            U / 双击 OK
+                          </td>
+                          <td class="px-3 py-1.5">收藏视频</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            J / 菜单键
+                          </td>
+                          <td class="px-2 py-1.5">比例切换</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            M
+                          </td>
+                          <td class="px-3 py-1.5">音量开关</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            I
+                          </td>
+                          <td class="px-3 py-1.5">个人中心</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            E
+                          </td>
+                          <td class="px-3 py-1.5">视图切换</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            R
+                          </td>
+                          <td class="px-3 py-1.5">顺序 / 随机</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            F
+                          </td>
+                          <td class="px-3 py-1.5">全屏切换</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            G
+                          </td>
+                          <td class="px-3 py-1.5">选择媒体源</td>
+                        </tr>
+
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            V
+                          </td>
+                          <td class="px-3 py-1.5">流媒体详情</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="hidden" aria-hidden="true">
+                  <h4 class="text-gray-300">🚀 交流与支持</h4>
+                  <p class="text-gray-400 text-xs mt-2">
+                    💬 欢迎转发分享本项目，关注社媒动态、加群催更互动！
+                  </p>
+                  <!-- 胶囊按钮组：社区 & 开源 -->
+                  <div class="grid grid-cols-2 gap-2 mt-3">
+                    <a
+                      href="https://space.bilibili.com/765334/"
+                      target="_blank"
+                      class="flex items-center justify-center text-[#FB7299] bg-[#FB7299]/10 hover:bg-[#FB7299]/20 px-3 py-1.5 rounded-full transition-colors border border-[#FB7299]/20 text-[10px] whitespace-nowrap active:scale-95"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/bilibili/FB7299"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="Bilibili"
+                      />
+                      B 站·教程</a
+                    >
+                    <a
+                      href="https://xhslink.com/m/XSWtx7YRfI"
+                      target="_blank"
+                      class="flex items-center justify-center text-[#FF2442] bg-[#FF2442]/10 hover:bg-[#FF2442]/20 px-3 py-1.5 rounded-full transition-colors border border-[#FF2442]/20 text-[10px] whitespace-nowrap active:scale-95"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/xiaohongshu/FF2442"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="Xiaohongshu"
+                      />
+                      小红书·攻略</a
+                    >
+                    <a
+                      href="https://qm.qq.com/q/ZzOD5Qbhce"
+                      target="_blank"
+                      class="flex items-center justify-center text-[#12B7F5] bg-[#12B7F5]/10 hover:bg-[#12B7F5]/20 px-3 py-1.5 rounded-full transition-colors border border-[#12B7F5]/20 text-[10px] whitespace-nowrap active:scale-95"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/qq/12B7F5"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="QQ"
+                      />
+                      QQ 群·催更</a
+                    >
+                    <a
+                      href="https://github.com/juneix"
+                      target="_blank"
+                      class="flex items-center justify-center text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-full transition-colors border border-white/20 text-[10px] whitespace-nowrap active:scale-95"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/github/white"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="GitHub"
+                      />
+                      GitHub · 开源</a
+                    >
+                  </div>
+                  <!-- 打赏区 -->
+                  <p class="text-gray-400 text-xs mt-4 mb-2">
+                    ☕ 打赏鼓励，支持我开发更多有趣应用～
+                  </p>
+                  <div class="flex justify-center space-x-3">
+                    <a href="weixin://profile/gh_86f7c0a73738">
+                      <div class="flex flex-col items-center">
+                        <img
+                          src="wechat.webp"
+                          alt="微信"
+                          class="w-24 h-24 object-cover rounded"
+                        />
+                        <span class="text-[10px] text-gray-400 mt-1">微信</span>
+                      </div>
+                    </a>
+                    <a
+                      href="alipays://platformapi/startapp?saId=10000007&clientVersion=3.7.0.0718&qrcode=https%3A%2F%2Fqr.alipay.com%2Ffkx15248wilbz2ddz96og40"
+                    >
+                      <div class="flex flex-col items-center">
+                        <img
+                          src="alipay.webp"
+                          alt="支付宝"
+                          class="w-24 h-24 object-cover rounded"
+                        />
+                        <span class="text-[10px] text-gray-400 mt-1"
+                          >支付宝</span
+                        >
+                      </div>
+                    </a>
+                  </div>
+                </div>
+
+                <div
+                  class="pt-4 border-t border-gray-700/50 text-xs text-gray-500 text-center flex flex-col space-y-1"
+                >
+                  <p class="hidden">
+                    Made with ❤️ by
+                    <a
+                      href="https://juneix.github.io"
+                      target="_blank"
+                      class="text-primary hover:underline"
+                      >谢週五</a
+                    >
+                  </p>
+                  <p>暮雪初晴</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="libraryModal" class="profile-layer text-white">
+        <div class="absolute top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 left-0 w-full bg-black/50 backdrop-blur-sm pointer-events-none -z-10"></div>
+        <div class="absolute top-0 left-0 w-full h-[calc(3.5rem+env(safe-area-inset-top))] border-b border-gray-700/50 bg-black/50 backdrop-blur-sm z-10 pt-[env(safe-area-inset-top)]">
+          <div class="flex items-center justify-center h-14 px-4 relative">
+            <span class="font-bold text-lg">选择媒体源</span>
+            <button id="closeLibraryBtn" type="button" aria-label="收起媒体源" class="drawer-dismiss active:text-gray-300">
+              <i data-lucide="chevron-down" class="w-6 h-6"></i>
+            </button>
+          </div>
+        </div>
+        <div class="modal-scrollbar-hidden absolute inset-0 overflow-y-auto overflow-x-hidden z-0">
+          <div class="pt-[calc(4.5rem+env(safe-area-inset-top))] px-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div id="librariesList" class="grid grid-cols-3 gap-2"></div>
+          <div id="mediaTree" class="hidden mt-4 rounded-xl border border-gray-700/50 bg-black/20 overflow-hidden"></div>
+          <button id="applyLibrariesBtn" class="w-full mt-4 bg-primary/20 border border-primary/50 text-primary py-2.5 rounded text-sm font-medium active:scale-95 transition-all focusable-item">确认所选媒体源</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="tagDrawer" class="tag-drawer text-white">
+        <div class="h-full flex flex-col pt-[env(safe-area-inset-top)]">
+          <div class="h-14 px-4 border-b border-gray-700/50 flex items-center justify-between shrink-0">
+            <span class="font-bold text-lg">视频标签</span>
+            <button id="closeTagDrawerBtn" type="button" aria-label="关闭标签" class="drawer-dismiss static active:text-gray-300">
+              <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+          </div>
+          <div class="flex-1 overflow-y-auto px-4 py-5 modal-scrollbar-hidden">
+            <p class="text-sm text-gray-400 mb-3">选择要添加到当前视频的标签</p>
+            <div id="tagList" class="flex flex-wrap gap-2"></div>
+            <p id="emptyTagsHint" class="text-sm text-gray-500 py-6 text-center">还没有标签，先新建一个吧</p>
+            <div id="newTagForm" class="hidden mt-5 p-4 rounded-lg border border-gray-700/50 bg-gray-800/40">
+              <label for="newTagInput" class="text-sm text-gray-300 block mb-2">标签名称</label>
+              <input id="newTagInput" type="text" maxlength="8" placeholder="最多 8 个字" class="w-full rounded border border-gray-600 bg-black/40 px-3 py-2.5 text-white text-sm outline-none focus:border-primary" />
+              <div class="flex gap-2 mt-3">
+                <button id="cancelNewTagBtn" type="button" class="flex-1 border border-gray-600 text-gray-300 py-2.5 rounded text-sm active:scale-95 transition-all">取消</button>
+                <button id="saveNewTagBtn" type="button" class="flex-1 bg-primary/20 border border-primary/50 text-primary py-2.5 rounded text-sm font-medium active:scale-95 transition-all">保存</button>
+              </div>
+            </div>
+            <button id="newTagBtn" type="button" class="w-full mt-5 border border-primary/50 text-primary bg-primary/10 py-2.5 rounded text-sm font-medium active:scale-95 transition-all focusable-item">
+              <i data-lucide="plus" class="w-4 h-4 inline-block align-text-bottom mr-1"></i>新建标签
+            </button>
+          </div>
+          <div class="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-gray-700/50 shrink-0">
+            <button id="saveVideoTagsBtn" type="button" class="w-full bg-primary/20 border border-primary/50 text-primary py-2.5 rounded text-sm font-medium active:scale-95 transition-all focusable-item">保存</button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        id="toast"
+        class="fixed top-16 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-2 rounded-2xl text-white text-sm pointer-events-none transition-opacity duration-300 opacity-0 z-[100] w-max max-w-[80vw] whitespace-normal text-center border border-white/10 backdrop-blur-sm"
+      >
+        提示信息
+      </div>
+      <div
+        id="loading"
+        class="fixed inset-0 z-40 flex items-center justify-center bg-transparent pointer-events-none hidden"
+      >
+        <div
+          class="w-10 h-10 border-4 border-gray-600 border-t-primary rounded-full animate-spin"
+        ></div>
+      </div>
+    </div>
+
+    <script>
+      /**
+       * ShuffleBox Core Logic
+       * 包含配置管理、播放器核心、UI 交互、手势控制
+       */
+      class EmbyApp {
+        constructor() {
+          // 应用状态
+          this.state = {
+            videos: [],
+            currentIndex: 0,
+            isPlaying: false,
+            favorites: new Set(),
+            tags: [],
+            selectedTags: new Set(),
+            playMode: "sequence",
+            viewMode: "stream",
+            isAutoplay: true,
+            currentTab: "home",
+            currentLibraryId: null,
+            isScaleFill: false,
+            isMuted: false,
+            lastReportTime: 0,
+            playSessionId: null,
+            playbackGeneration: 0,
+            preparedNext: null,
+            originalVideos: [], // 随机模式下保存原始顺序列表
+            collapsedGroupPaths: new Set(),
+          };
+
+          this.config = {
+            server: "",
+            user: "",
+            token: "",
+            userId: "",
+            useStatic: true,
+            autoplay: true,
+            shortDrama: false,
+            deleteMode: false,
+          };
+          // 保存时以服务端已确认的 SMB 配置为基准，避免仅修改偏好设置时
+          // 触发不必要的 SMB 请求、扫描和页面刷新。
+          this.smbConfig = null;
+          this.adminSettingsEnabled = false;
+
+          this.csTimer = null;
+          this.feedObserver = null;
+          this.feedIntersectionRatios = new Map();
+          this.feedActiveIndex = null;
+          this.feedActivationToken = 0;
+          this.feedObserverThreshold = 0.75;
+
+          this.dom = {}; // DOM 元素缓存
+          this.config.deviceName = this.getDeviceName();
+          this.init();
+        }
+
+        getDeviceName() {
+          const ua = navigator.userAgent;
+          if (/android/i.test(ua)) {
+            const match = ua.match(/\(([^)]+)\)/);
+            if (match && match[1]) {
+              const parts = match[1].split(";");
+              for (let p of parts) {
+                p = p.trim();
+                if (
+                  /^linux/i.test(p) ||
+                  /^u$/i.test(p) ||
+                  /^android/i.test(p) ||
+                  /^[a-z]{2}-[a-z]{2}$/i.test(p) ||
+                  /wv/.test(p)
+                )
+                  continue;
+                const model = p.split("Build/")[0].trim();
+                if (model) return `Android (${model})`;
+              }
+            }
+            return "Android";
+          } else if (
+            /ipad|macintosh/i.test(ua) &&
+            navigator.maxTouchPoints > 1
+          ) {
+            return "iPad";
+          } else if (/iphone/i.test(ua)) {
+            return "iPhone";
+          } else if (/macintosh/i.test(ua)) {
+            return "macOS";
+          } else if (/windows/i.test(ua)) {
+            return "Windows";
+          }
+          return "Web Browser";
+        }
+
+        // 检查当前是否有任何弹窗/面板处于打开状态
+        // 这种状态下不应触发自动清屏
+        isAnyModalOpen() {
+          const modals = [
+            "mediaInfoModal",
+            "deleteConfirmModal",
+            "profilePage",
+            "libraryModal",
+            "tagDrawer",
+          ];
+          return modals.some((id) => {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            // 上滑面板使用 active 类名，其他弹窗使用 hidden 类名。
+            if (id === "profilePage" || id === "libraryModal" || id === "tagDrawer") return el.classList.contains("active");
+            return !el.classList.contains("hidden");
+          });
+        }
+
+        // --- 初始化 ---
+        init() {
+          this.cacheDOM();
+          this.loadConfig();
+
+          // 动态读取版本号：从 HTML 标签中提取（如 v1.1 -> 1.1）
+          const vEl = document.querySelector(".bg-primary\\/20.text-xs");
+          this.config.appVersion = vEl
+            ? vEl.textContent.replace("v", "").trim()
+            : "1.1";
+
+          this.loadFavorites();
+          this.bindEvents();
+
+          this.state.isAutoplay = this.config.autoplay !== false;
+
+          // 根据持久化状态同步 UI 图标
+          if (this.dom.muteBtn) {
+            const iconName = this.state.isMuted ? "volume-x" : "volume-2";
+            const iconColor = this.state.isMuted
+              ? "text-secondary"
+              : "stroke-white";
+            this.dom.muteBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${iconName}" class="${iconColor} w-6 h-6 drop-shadow-md"></i></div>`;
+          }
+          if (this.dom.scaleBtn) {
+            this.dom.scaleBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isScaleFill ? "maximize-2" : "minimize-2"}" class="stroke-white w-6 h-6 drop-shadow-md"></i></div>`;
+          }
+
+          // 初始化视图模式按钮图标（默认竖版，显示gallery-vertical）
+          const viewBtn = this.dom.viewModeBtn;
+          viewBtn.innerHTML = `<i data-lucide="gallery-vertical" class="stroke-current w-5 h-5"></i>`;
+
+          // 初始化播放模式按钮图标
+          const playBtn = this.dom.playModeBtn;
+          // 随机模式为全局随机；顺序图标对应“类内随机”。
+          const isSeq = this.state.playMode === "sequence";
+          const playIcon = isSeq ? "repeat" : "shuffle";
+          playBtn.innerHTML = `<i data-lucide="${playIcon}" class="stroke-current w-5 h-5"></i>`;
+
+          lucide.createIcons();
+
+          // 先从服务器恢复已确认的媒体源，确保换浏览器或重启后仍使用同一选择。
+          this.restoreMediaPreferences().finally(() => fetch("/api/status")
+            .then((res) => res.json())
+            .then((status) => {
+              if (status.configured && !status.error) {
+                this.fetchVideos(
+                  this.state.currentLibraryId,
+                  null,
+                  false,
+                  this.state.playMode === "random",
+                );
+              } else {
+                if (status.error)
+                  this.showToast(`SMB 挂载失败：${status.error}`);
+                setTimeout(() => this.toggleModal("profilePage", true), 500);
+              }
+            })
+            .catch(() => {
+              this.showToast("无法连接 ShuffleBox SMB 后端");
+              setTimeout(() => this.toggleModal("profilePage", true), 500);
+            }));
+
+          // ─── 注入项目签名彩蛋 (Branding Egg) ───
+          console.log(
+            "%c ShuffleBox %c 原创设计@谢週五 %c",
+            "background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px 0 0 4px;font-weight:bold;",
+            "background:#1e293b;color:#fff;padding:2px 6px;border-radius:0 4px 4px 0;",
+            "background:transparent",
+          );
+        }
+
+        cacheDOM() {
+          const ids = [
+            "videoContainer",
+            "clickToPlayOverlay",
+            "loading",
+            "toast",
+            "videoInfoArea",
+            "videoTitle",
+            "videoDescription",
+            "progressLine",
+            "currentTime",
+            "totalTime",
+            "playModeBtn",
+            "viewModeBtn",
+            "libraryBtn",
+            "myBtn",
+            "favoriteBtn",
+            "tagBtn",
+            "muteBtn",
+            "fullscreenBtn",
+            "deleteBtn",
+            "mediaInfoModal",
+            "mediaInfoContent",
+            "closeMediaInfoBtn",
+            "deleteConfirmModal",
+            "confirmDeleteBtn",
+            "cancelDeleteBtn",
+            "deleteFileName",
+            "configServer",
+            "configUser",
+            "configPwd",
+            "configStatic",
+            "configAutoplay",
+            "configShortDrama",
+            "configDeleteMode",
+          ];
+          ids.forEach((id) => (this.dom[id] = document.getElementById(id)));
+          this.dom.rightToolbar = document.querySelector(".right-toolbar");
+        }
+
+        // --- 配置与数据管理 ---
+        migrateLegacyStorage() {
+          const migrations = [
+            ["embyx_smb_user", "shufflebox_smb_user"],
+            ["embyx_smb_share", "shufflebox_smb_share"],
+            ["embyx_smb_guest", "shufflebox_smb_guest"],
+            ["emby_autoplay", "shufflebox_autoplay"],
+            ["emby_shortdrama", "shufflebox_shortdrama"],
+            ["emby_delete_mode", "shufflebox_delete_mode"],
+            ["emby_device_id", "shufflebox_device_id"],
+            ["emby_favorites", "shufflebox_favorites"],
+            ["emby_views_cache", "shufflebox_views_cache"],
+            ["emby_lib_id", "shufflebox_lib_id"],
+            ["emby_lib_type", "shufflebox_lib_type"],
+            ["emby_collapsed_group_paths", "shufflebox_collapsed_group_paths"],
+            ["emby_is_scale_fill", "shufflebox_is_scale_fill"],
+            ["emby_is_muted", "shufflebox_is_muted"],
+            ["emby_play_mode", "shufflebox_play_mode"],
+          ];
+          for (const [legacyKey, currentKey] of migrations) {
+            if (localStorage.getItem(currentKey) === null) {
+              const legacyValue = localStorage.getItem(legacyKey);
+              if (legacyValue !== null) localStorage.setItem(currentKey, legacyValue);
+            }
+            localStorage.removeItem(legacyKey);
+          }
+        }
+
+        loadConfig() {
+          this.migrateLegacyStorage();
+          this.config.server = location.origin;
+          this.config.user = localStorage.getItem("shufflebox_smb_user") || "";
+          this.config.token = "local-smb";
+          this.config.userId = "local";
+          this.config.share = localStorage.getItem("shufflebox_smb_share") || "";
+          this.config.guest =
+            localStorage.getItem("shufflebox_smb_guest") === "true";
+          this.config.useStatic = true;
+          this.config.autoplay =
+            localStorage.getItem("shufflebox_autoplay") !== "false";
+          this.config.shortDrama =
+            localStorage.getItem("shufflebox_shortdrama") === "true";
+          this.config.deleteMode =
+            localStorage.getItem("shufflebox_delete_mode") === "true";
+          try {
+            this.state.collapsedGroupPaths = new Set(
+              JSON.parse(localStorage.getItem("shufflebox_collapsed_group_paths") || "[]"),
+            );
+          } catch {}
+
+          // 生成或读取设备唯一 ID，解决多设备识别冲突问题
+          if (!localStorage.getItem("shufflebox_device_id")) {
+            const randomId = Math.random().toString(36).slice(2, 10);
+            localStorage.setItem("shufflebox_device_id", `ShuffleBox-${randomId}`);
+          }
+          this.config.deviceId = localStorage.getItem("shufflebox_device_id");
+          this.config.playbackControlId = `${this.config.deviceId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+          // 读取高频交互状态
+          const savedScale = localStorage.getItem("shufflebox_is_scale_fill");
+          if (savedScale !== null)
+            this.state.isScaleFill = savedScale === "true";
+          this.state.isScaleFill = false;
+          localStorage.setItem("shufflebox_is_scale_fill", "false");
+
+          const savedMute = localStorage.getItem("shufflebox_is_muted");
+          if (savedMute !== null) this.state.isMuted = savedMute === "true";
+
+          const savedPlayMode = localStorage.getItem("shufflebox_play_mode");
+          if (savedPlayMode !== null) this.state.playMode = savedPlayMode;
+          if (this.config.shortDrama) this.state.playMode = "sequence";
+
+          const savedLibId = localStorage.getItem("shufflebox_lib_id");
+          const savedLibType = localStorage.getItem("shufflebox_lib_type");
+          if (savedLibId) {
+            this.state.currentLibraryId = savedLibId;
+            this.state.currentLibraryType = savedLibType || "library";
+          }
+
+          // 填充 UI
+          if (this.dom.configServer)
+            this.dom.configServer.value = this.config.share;
+          if (this.dom.configUser) this.dom.configUser.value = this.config.user;
+          if (this.dom.configPwd && this.config.share)
+            this.dom.configPwd.value = "********";
+          if (this.dom.configStatic)
+            this.dom.configStatic.checked = this.config.guest;
+          if (this.dom.configAutoplay)
+            this.dom.configAutoplay.checked = this.config.autoplay;
+          if (this.dom.configShortDrama)
+            this.dom.configShortDrama.checked = this.config.shortDrama;
+          if (this.dom.configDeleteMode)
+            this.dom.configDeleteMode.checked = this.config.deleteMode;
+
+          // 后端保存 SMB 凭据；新浏览器访问时也能回显非敏感配置。
+          fetch("/api/smb/config")
+            .then((res) => res.json())
+            .then((remote) => {
+              this.setAdminSettingsVisibility(remote.adminSettingsEnabled === true);
+              this.smbConfig = remote;
+              if (remote.share) {
+                this.config.share = remote.share;
+                this.config.user = remote.username || "";
+                this.config.guest = remote.guest === true;
+                this.config.deleteMode = remote.deleteMode === true;
+                this.dom.configServer.value = remote.share;
+                this.dom.configUser.value = remote.username || "";
+                this.dom.configPwd.value = remote.hasPassword ? "********" : "";
+                this.dom.configStatic.checked = remote.guest === true;
+                this.dom.configDeleteMode.checked = remote.deleteMode === true;
+                this.dom.deleteBtn.style.display = remote.deleteMode
+                  ? "flex"
+                  : "none";
+              }
+            })
+            .catch(() => {});
+
+          // 基于配置同步UI
+          this.dom.deleteBtn.style.display = this.config.deleteMode
+            ? "flex"
+            : "none";
+          if (this.dom.playModeBtn) {
+            this.dom.playModeBtn.innerHTML = `<i data-lucide="${this.state.playMode === "random" ? "shuffle" : "repeat"}" class="stroke-current w-5 h-5"></i>`;
+            lucide.createIcons();
+          }
+        }
+
+        setAdminSettingsVisibility(enabled) {
+          this.adminSettingsEnabled = enabled;
+          ["configShareField", "configCredentialsField", "rowStatic", "rowDeleteMode", "resetConfigBtn"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+              el.hidden = !enabled;
+              el.classList.toggle("hidden", !enabled);
+            }
+          });
+          if (!enabled) {
+            this.config.share = "";
+            this.config.user = "";
+            this.config.deleteMode = false;
+            if (this.dom.configServer) this.dom.configServer.value = "";
+            if (this.dom.configUser) this.dom.configUser.value = "";
+            if (this.dom.configPwd) this.dom.configPwd.value = "";
+            ["shufflebox_smb_share", "shufflebox_smb_user", "shufflebox_delete_mode"].forEach((key) =>
+              localStorage.removeItem(key),
+            );
+          }
+        }
+
+        async restoreMediaPreferences() {
+          try {
+            const res = await fetch("/api/media/preferences");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const saved = await res.json();
+            if (saved.libraryId) {
+              this.state.currentLibraryId = saved.libraryId;
+              this.state.currentLibraryType = saved.libraryType || "library";
+              localStorage.setItem("shufflebox_lib_id", saved.libraryId);
+              localStorage.setItem("shufflebox_lib_type", this.state.currentLibraryType);
+            }
+            if (Array.isArray(saved.collapsedGroupPaths)) {
+              this.state.collapsedGroupPaths = new Set(saved.collapsedGroupPaths);
+              localStorage.setItem("shufflebox_collapsed_group_paths", JSON.stringify(saved.collapsedGroupPaths));
+            }
+          } catch (error) {
+            // 保留旧版本的浏览器本地设置作为后端暂不可达时的回退。
+            console.warn("无法恢复服务器媒体源设置:", error);
+          }
+        }
+
+        async saveMediaPreferences() {
+          const payload = {
+            libraryId: this.state.currentLibraryId || "",
+            libraryType: this.state.currentLibraryType || "library",
+            collapsedGroupPaths: [...this.state.collapsedGroupPaths],
+          };
+          const res = await fetch("/api/media/preferences", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || `HTTP ${res.status}`);
+          }
+          localStorage.setItem("shufflebox_lib_id", payload.libraryId);
+          localStorage.setItem("shufflebox_lib_type", payload.libraryType);
+          localStorage.setItem("shufflebox_collapsed_group_paths", JSON.stringify(payload.collapsedGroupPaths));
+        }
+
+        async saveConfig() {
+          if (!this.adminSettingsEnabled) {
+            const autoplay = this.dom.configAutoplay.checked;
+            const shortDrama = this.dom.configShortDrama.checked;
+            localStorage.setItem("shufflebox_autoplay", autoplay);
+            localStorage.setItem("shufflebox_shortdrama", shortDrama);
+            this.config.autoplay = autoplay;
+            this.config.shortDrama = shortDrama;
+            this.state.isAutoplay = autoplay;
+            if (shortDrama) this.state.playMode = "sequence";
+            this.showToast("设置已保存");
+            return;
+          }
+          const share = this.dom.configServer.value.trim().replace(/\\/g, "/");
+          const username = this.dom.configUser.value.trim();
+          const password = this.dom.configPwd.value;
+          const guest = this.dom.configStatic.checked;
+          const autoplay = this.dom.configAutoplay.checked;
+          const shortDrama = this.dom.configShortDrama.checked;
+          const deleteMode = this.dom.configDeleteMode.checked;
+
+          const currentSmb = this.smbConfig || {
+            share: this.config.share || "",
+            username: this.config.user || "",
+            guest: Boolean(this.config.guest),
+            deleteMode: Boolean(this.config.deleteMode),
+            vers: "3.0",
+            hasPassword: this.dom.configPwd.value === "********",
+          };
+          // 密码框中的掩码代表“保持原密码”；只有输入新值或清空已有密码
+          // 才视为 SMB 凭据发生变化。
+          const passwordChanged = !guest && password !== "********" &&
+            (Boolean(currentSmb.hasPassword) || password !== "");
+          const smbChanged =
+            share !== (currentSmb.share || "") ||
+            username !== (currentSmb.username || "") ||
+            guest !== Boolean(currentSmb.guest) ||
+            deleteMode !== Boolean(currentSmb.deleteMode) ||
+            "3.0" !== (currentSmb.vers || "3.0") ||
+            passwordChanged;
+
+          const savePreferences = () => {
+            localStorage.setItem("shufflebox_autoplay", autoplay);
+            localStorage.setItem("shufflebox_shortdrama", shortDrama);
+            localStorage.setItem("shufflebox_delete_mode", deleteMode);
+            this.config.autoplay = autoplay;
+            this.config.shortDrama = shortDrama;
+            this.config.deleteMode = deleteMode;
+            this.state.isAutoplay = autoplay;
+            if (shortDrama) this.state.playMode = "sequence";
+            this.dom.deleteBtn.style.display = deleteMode ? "flex" : "none";
+          };
+
+          if (!smbChanged) {
+            savePreferences();
+            this.showToast("设置已保存");
+            return;
+          }
+
+          if (!/^\/\/[^/]+\/[^/]+/.test(share))
+            return this.showToast("SMB 地址格式应为 //服务器/共享名");
+          if (!guest && !username)
+            return this.showToast("请填写 SMB 用户名，或启用访客访问");
+
+          this.toggleLoading(true);
+          try {
+            const res = await fetch("/api/smb/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                share,
+                username,
+                password,
+                guest,
+                deleteMode,
+                vers: "3.0",
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+            localStorage.setItem("shufflebox_smb_share", share);
+            localStorage.setItem("shufflebox_smb_user", username);
+            localStorage.setItem("shufflebox_smb_guest", guest);
+            savePreferences();
+            localStorage.removeItem("shufflebox_views_cache");
+            localStorage.removeItem("shufflebox_lib_id");
+            localStorage.removeItem("shufflebox_lib_type");
+            this.showToast(`已挂载，发现 ${data.itemCount || 0} 个视频`);
+            setTimeout(() => location.reload(), 500);
+          } catch (error) {
+            console.error("SMB config error:", error);
+            this.showToast(`SMB 挂载失败：${error.message}`);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async resetConfig() {
+          if (!confirm("确定要清除当前 SMB 挂载状态吗？其他播放设置不会被清除。"))
+            return;
+          this.toggleLoading(true);
+          try {
+            const res = await fetch("/api/smb/config", { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            [
+              "shufflebox_smb_share",
+              "shufflebox_smb_user",
+              "shufflebox_smb_guest",
+              "shufflebox_views_cache",
+              "shufflebox_lib_id",
+              "shufflebox_lib_type",
+            ].forEach((key) => localStorage.removeItem(key));
+            this.showToast("当前 SMB 挂载状态已清除");
+            setTimeout(() => location.reload(), 500);
+          } catch (error) {
+            console.error("Clear SMB mount state error:", error);
+            this.showToast(`清除挂载状态失败：${error.message}`);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async loadFavorites() {
+          const { server, token, userId } = this.config;
+          if (!server || !token || !userId) {
+            const saved = localStorage.getItem("shufflebox_favorites");
+            if (saved) this.state.favorites = new Set(JSON.parse(saved));
+            return;
+          }
+          try {
+            const res = await fetch(
+              `${server}/emby/Users/${userId}/Items?api_key=${token}&Recursive=true&Filters=IsFavorite&Fields=Id`,
+            );
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.Items) {
+                this.state.favorites = new Set(
+                  data.Items.map((i) => String(i.Id)),
+                );
+                localStorage.setItem(
+                  "shufflebox_favorites",
+                  JSON.stringify([...this.state.favorites]),
+                );
+                this.updateUI();
+              }
+            }
+          } catch (e) {
+            console.error("加载远端收藏夹失败:", e);
+            const saved = localStorage.getItem("shufflebox_favorites");
+            if (saved) this.state.favorites = new Set(JSON.parse(saved));
+          }
+        }
+
+        // --- 核心播放逻辑 ---
+        async fetchVideos(
+          parentId = null,
+          ids = null,
+          isLoadMore = false,
+          isRandom = false,
+          isAppend = false,
+        ) {
+          this.toggleLoading(!isAppend); // 追加时不显示全屏 loading
+          try {
+            const { server, token, userId } = this.config;
+            if (!server || !token) {
+              if (!isAppend) this.showToast("请先配置服务器");
+              return;
+            }
+
+            if (!isLoadMore && !isAppend) {
+              this.state.startIndex = 0;
+            }
+
+            const libraryId = parentId || this.state.currentLibraryId;
+
+            // --- 分页参数 ---
+            // 每页只取少量视频，避免一次性创建过大的 feed。
+            const PAGE_SIZE = 20;
+
+            let fetchStartIndex = this.state.startIndex || 0;
+            if (isAppend) {
+              fetchStartIndex += this.state.videos.length;
+            }
+
+            let url = `${server}/emby/Users/${userId}/Items?api_key=${token}&Recursive=true&IncludeItemTypes=Movie,Episode,Video,MusicVideo&Limit=${PAGE_SIZE}&StartIndex=${fetchStartIndex}&Fields=Overview,Path,RunTimeTicks,MediaSources`;
+
+            if (ids) {
+              url += `&Ids=${ids}`;
+            } else if (isRandom) {
+              // 一次随机播放会话复用同一种子，保证分页来自同一个排列；
+              // 新一轮随机则换种子，避免相同媒体源反复得到相似顺序。
+              const nonce = isAppend && this.state.shuffleSeed
+                ? this.state.shuffleSeed
+                : this.createShuffleSeed();
+              this.state.shuffleSeed = nonce;
+              url += `&SortBy=Random&RandomSeed=${encodeURIComponent(nonce)}`;
+              const groups = [...this.state.collapsedGroupPaths];
+              if (groups.length)
+                url += `&RandomGroups=${encodeURIComponent(JSON.stringify(groups))}`;
+              if (libraryId && libraryId !== "favorites")
+                url += `&ParentId=${libraryId}`;
+              if (libraryId === "favorites") url += `&Filters=IsFavorite`;
+            } else if (libraryId === "favorites") {
+              if (!isAppend) this.state.shuffleSeed = null;
+              url += `&SortBy=DateCreated&SortOrder=Descending&Filters=IsFavorite`;
+            } else if (libraryId) {
+              if (!isAppend) this.state.shuffleSeed = null;
+              const sortStr = this.config.shortDrama
+                ? "SortBy=Path&SortOrder=Ascending"
+                : "SortBy=DateCreated&SortOrder=Descending";
+              url += `&${sortStr}&ParentId=${libraryId}`;
+            } else {
+              const sortStr = this.config.shortDrama
+                ? "SortBy=Path&SortOrder=Ascending"
+                : "SortBy=DateCreated&SortOrder=Descending";
+              url += `&${sortStr}`;
+            }
+
+            const res = await fetch(url, {
+              headers: {
+                "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+              },
+            });
+            if (!res.ok) {
+              throw new Error(`服务器错误: ${res.status}`);
+            }
+            let data = await res.json();
+
+            if (data && data.Items && data.Items.length > 0) {
+              if (isAppend) {
+                const startIndex = this.state.videos.length;
+                this.state.videos.push(...data.Items);
+                if (
+                  this.state.playMode === "random" &&
+                  this.state.originalVideos
+                ) {
+                  this.state.originalVideos.push(...data.Items);
+                }
+                this.appendFeedItems(data.Items, startIndex);
+                return; // 追加状态静默退出，不重置数据和 UI
+              } else {
+                this.state.videos = data.Items;
+                this.state.currentIndex = 0;
+                // 保存媒体库真实总数（API 返回，不受 Limit 影响）供分页显示
+                this.state.totalCount = data.TotalRecordCount || 0;
+
+                // 随机模式下加载完，直接原地洗牌（保持第一个视频在首位）
+                if (this.state.playMode === "random") {
+                  this.state.originalVideos = [...this.state.videos];
+                  // 服务端随机结果已经按目录均衡编排，不再二次打乱。
+                  if (!isRandom) this._shuffleAroundCurrent();
+                }
+
+                if (this.state.viewMode === "grid") {
+                  this.renderGridView();
+                } else {
+                  this.renderSlides();
+                }
+              }
+            } else if (isLoadMore || isAppend) {
+              if (!isAppend) this.showToast("没有更多视频了");
+              // 已到最后一页，不循环
+              this.state.startIndex = Math.max(0, this.state.startIndex || 0);
+              this.toggleLoading(false);
+              return;
+            } else {
+              this.showToast("没有找到视频");
+              this.dom.videoContainer.innerHTML = "";
+            }
+          } catch (e) {
+            console.error("获取视频失败:", e);
+            this.showToast("无法连接服务器: " + (e.message || "未知错误"));
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        renderGridView() {
+          this.disconnectFeedObserver();
+          this.feedActivationToken += 1;
+          this.feedActiveIndex = null;
+          const container = this.dom.videoContainer;
+          container.querySelectorAll("video").forEach((video) => this.releaseVideoElement(video));
+          // 重置页面滚动（防止 scrollIntoView 污染 html.scrollTop 导致标题栏错位）
+          document.documentElement.scrollTop = 0;
+          container.innerHTML = "";
+          // 完全重置为绝对定位的、可滚动的原生网格层
+          container.className =
+            "absolute inset-0 z-10 bg-black/40 overflow-hidden flex flex-col";
+
+          // 背景海报模糊层
+          const currentVideo = this.state.videos[this.state.currentIndex];
+          const bgPosterStr = currentVideo
+            ? this.getImageSrc(currentVideo)
+            : "";
+          const bgLayer = document.createElement("div");
+          bgLayer.className =
+            "absolute inset-0 bg-cover bg-center opacity-70 scale-[1.15] blur-xl z-[-1] pointer-events-none";
+          if (bgPosterStr) {
+            const imgL = new Image();
+            imgL.crossOrigin = "anonymous";
+            imgL.referrerPolicy = "no-referrer";
+            imgL.src = bgPosterStr;
+            imgL.onerror = () => {
+              bgLayer.style.backgroundImage = `url('${this.getImageSrc(null)}')`;
+            };
+            bgLayer.style.backgroundImage = `url('${bgPosterStr}')`;
+          }
+          container.appendChild(bgLayer);
+
+          const gridWrapper = document.createElement("div");
+          const safeHeader = document.createElement("div");
+
+          let libraryName = "全部视频";
+          if (this.state.currentLibraryId === "favorites") {
+            libraryName = "收藏夹";
+          } else if (this.state.currentLibraryId) {
+            const libIdStr = String(this.state.currentLibraryId);
+            // 尝试从视图/播放列表数据缓存中寻找库名
+            const cachedViewsStr = localStorage.getItem("shufflebox_views_cache");
+            if (cachedViewsStr) {
+              try {
+                const cached = JSON.parse(cachedViewsStr);
+                let found = null;
+                if (cached.views && cached.views.Items) {
+                  found = cached.views.Items.find(
+                    (i) => String(i.Id) === libIdStr,
+                  );
+                }
+                if (!found && cached.playlists && cached.playlists.Items) {
+                  found = cached.playlists.Items.find(
+                    (i) => String(i.Id) === libIdStr,
+                  );
+                }
+                if (found) libraryName = found.Name;
+              } catch (e) {}
+            }
+          }
+
+          const PAGE_SIZE = 20; // 与 fetchVideos 中保持一致
+          const totalCount = this.state.totalCount || 0;
+          const startIndex = this.state.startIndex || 0;
+          const currentPage = Math.floor(startIndex / PAGE_SIZE) + 1;
+          const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+          const isSpecificLib = !!this.state.currentLibraryId; // 是否选了具体媒体库
+          const showPager = isSpecificLib && totalPages > 1;
+
+          // 总数显示：真实数字（≤999）或 999+
+          const countStr = totalCount > 999 ? "999+" : String(totalCount);
+
+          safeHeader.className =
+            "w-full flex items-center gap-2 bg-black/50 backdrop-blur-sm border-b border-gray-800/50 px-3 pb-3";
+          safeHeader.style.paddingTop =
+            "max(8px, env(safe-area-inset-top, 8px))";
+
+          // 全局统一布局： [媒体库名] [count ✨] (若有多页则右侧添加 [❮ x/n ❯])
+          safeHeader.innerHTML = `
+                    <span class="text-sm font-bold text-gray-200">${libraryName}</span>
+                    <span class="text-xs font-bold text-primary/70 tabular-nums flex items-center">
+                        ${countStr}
+                        <span class="w-1.5"></span>
+                        <button id="gridShuffleBtn" title="随机换一批" class="active:scale-90 transition-transform p-[2px] bg-white/10 rounded-full hover:bg-white/20">
+                            <i data-lucide="sparkles" class="w-3.5 h-3.5 text-white"></i>
+                        </button>
+                    </span>
+                    <span class="flex-1"></span>
+                    ${
+                      showPager
+                        ? `
+                        <button id="gridPrevBtn" class="px-1.5 py-0.5 rounded text-xs ${currentPage <= 1 ? "text-gray-600 pointer-events-none" : "text-gray-300 active:scale-90 hover:text-white transition-colors"}">❮</button>
+                        <span class="text-xs font-bold text-white tabular-nums">${currentPage}<span class="px-0.5">/</span>${totalPages}</span>
+                        <button id="gridNextBtn" class="px-1.5 py-0.5 rounded text-xs ${currentPage >= totalPages ? "text-gray-600 pointer-events-none" : "text-gray-300 active:scale-90 hover:text-white transition-colors"}">❯</button>
+                    `
+                        : ""
+                    }
+                `;
+          container.appendChild(safeHeader);
+
+          // 换一批按钮：所有模式都有，随机获取  150 个
+          const shuffleBtn = document.getElementById("gridShuffleBtn");
+          if (shuffleBtn) {
+            const curLibId = this.state.currentLibraryId;
+            const libArg =
+              !curLibId || curLibId === "favorites" ? null : curLibId;
+            shuffleBtn.onclick = (e) => {
+              e.stopPropagation();
+              this.state.startIndex = 0;
+              this.fetchVideos(libArg, null, false, true); // isRandom=true
+            };
+          }
+
+          // 分页按钮：仅指定媒体库且多页时显示
+          if (showPager) {
+            const curLibId = this.state.currentLibraryId;
+            const libArg = curLibId === "favorites" ? null : curLibId;
+
+            const prevBtn = document.getElementById("gridPrevBtn");
+            if (prevBtn && currentPage > 1) {
+              prevBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.state.startIndex = Math.max(0, startIndex - PAGE_SIZE);
+                this.fetchVideos(libArg, null, true, false);
+              };
+            }
+            const nextBtn = document.getElementById("gridNextBtn");
+            if (nextBtn && currentPage < totalPages) {
+              nextBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.state.startIndex = startIndex + PAGE_SIZE;
+                this.fetchVideos(libArg, null, true, false);
+              };
+            }
+          }
+
+          // 创建专门的内部滚动容器
+          const scrollArea = document.createElement("div");
+          scrollArea.className =
+            "modal-scrollbar-hidden flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative w-full overscroll-contain";
+          scrollArea.style.WebkitOverflowScrolling = "touch";
+          container.appendChild(scrollArea);
+
+          // MOUSE DRAG SUPPORT FOR GRID
+          let isDown = false;
+          let startY;
+          let scrollTop;
+          scrollArea.addEventListener("mousedown", (e) => {
+            isDown = true;
+            scrollArea.style.cursor = "grabbing";
+            startY = e.pageY - scrollArea.offsetTop;
+            scrollTop = scrollArea.scrollTop;
+          });
+          scrollArea.addEventListener("mouseleave", () => {
+            isDown = false;
+            scrollArea.style.cursor = "";
+          });
+          scrollArea.addEventListener("mouseup", () => {
+            isDown = false;
+            scrollArea.style.cursor = "";
+          });
+          scrollArea.addEventListener("mousemove", (e) => {
+            if (!isDown) return;
+            e.preventDefault();
+            const y = e.pageY - scrollArea.offsetTop;
+            const walk = (y - startY) * 2;
+            scrollArea.scrollTop = scrollTop - walk;
+          });
+
+          gridWrapper.className =
+            "grid grid-cols-3 gap-1 content-start w-full relative z-10 px-1 pt-2";
+          scrollArea.appendChild(gridWrapper);
+
+          this.state.videos.forEach((video, index) => {
+            const el = document.createElement("div");
+            const isActive = index === this.state.currentIndex;
+            el.setAttribute("tabindex", "0");
+            el.setAttribute("data-index", index);
+            el.className = `focusable-item aspect-[3/4] relative cursor-pointer overflow-hidden rounded-sm active:scale-95 transition-transform ${isActive ? "border-2 border-primary box-border" : "bg-gray-800"}`;
+            el.onclick = () => {
+              this.state.currentIndex = index;
+              this.toggleViewMode();
+            };
+
+            const img = document.createElement("img");
+            img.crossOrigin = "anonymous";
+            img.referrerPolicy = "no-referrer";
+            img.src = this.getImageSrc(video);
+            img.className = "w-full h-full object-cover";
+            img.loading = "lazy";
+            img.onerror = () => {
+              img.onerror = null;
+              // poster.webp 也不存在时，用内联 SVG 兜底，避免显示破损图标
+              img.src =
+                'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="1" height="1"%3E%3Crect width="1" height="1" fill="%23333"%2F%3E%3C%2Fsvg%3E';
+            };
+            el.appendChild(img);
+
+            if (video.RunTimeTicks) {
+              const duration = Math.floor(video.RunTimeTicks / 10000000);
+              const mins = Math.floor(duration / 60);
+              const secs = duration % 60;
+              const timeBadge = document.createElement("div");
+              timeBadge.className =
+                "absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded";
+              timeBadge.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
+              el.appendChild(timeBadge);
+            }
+
+            gridWrapper.appendChild(el);
+          });
+
+          // --- 彩蛋尾部文案：一言 API ---
+          // 修改说明：
+          //   基础 URL: https://v1.hitokoto.cn/
+          //   常用参数: ?c=a (动画) | ?c=b (漫画) | ?c=d (文学) | ?c=i (诗词)
+          //   不传参数则随机全类型
+          //   如不需要彩蛋，移除下方代码块即可
+          const eggFooter = document.createElement("div");
+          eggFooter.className =
+            "col-span-3 pt-8 pb-24 px-4 text-center text-gray-600 text-[11px] leading-relaxed select-none";
+          eggFooter.innerHTML = '<span class="opacity-40">——</span>';
+          gridWrapper.appendChild(eggFooter);
+
+          // 异步获取一言并填入尾部
+          fetch("https://v1.hitokoto.cn/?encode=json&charset=utf-8")
+            .then((r) => r.json())
+            .then((data) => {
+              const text = data.hitokoto || "";
+              // from_who 为作者，from 为来源作品
+              const source = [data.from_who, data.from]
+                .filter(Boolean)
+                .join(" · ");
+              eggFooter.innerHTML = `
+                            <p class="text-gray-300">“${text}”</p>
+                            ${source ? `<p class="mt-1 text-gray-500 italic">- ${source} -</p>` : ""}
+                        `;
+            })
+            .catch(() => {
+              // 网络失败就静默不显示
+              eggFooter.innerHTML = "";
+            });
+
+          // 定位到当前高亮元素
+          const focusVideo = this.state.videos[this.state.currentIndex];
+          if (focusVideo) {
+            this.dom.videoTitle.textContent = focusVideo.Name || "未知视频";
+            this.dom.videoDescription.textContent =
+              focusVideo.Overview || "没有简介...";
+          }
+
+          // 滚动到当前高亮的卡片（直接操作 scrollArea，避免 scrollIntoView 污染 html.scrollTop）
+          requestAnimationFrame(() => {
+            const activeEl = gridWrapper.children[this.state.currentIndex];
+            if (activeEl && scrollArea) {
+              const elTop = activeEl.offsetTop;
+              const elHeight = activeEl.offsetHeight;
+              const areaHeight = scrollArea.clientHeight;
+              scrollArea.scrollTop = elTop - areaHeight / 2 + elHeight / 2;
+            }
+          });
+
+          lucide.createIcons();
+        }
+
+        // Feed rendering and visibility are managed by one observer-driven lifecycle.
+
+        renderSlides() {
+          this.disconnectFeedObserver();
+          const container = this.dom.videoContainer;
+          container.className =
+            "relative w-full h-full flex flex-col overflow-y-auto overscroll-y-contain snap-y snap-mandatory feed-scrollbar-hidden";
+          container.innerHTML = "";
+          this.feedActivationToken += 1;
+          this.state.isPlaying = false;
+          this.feedActiveIndex = null;
+          this.feedIntersectionRatios.clear();
+
+          const fragment = document.createDocumentFragment();
+          this.state.videos.forEach((video, index) => {
+            fragment.appendChild(this.createFeedItem(video, index));
+          });
+          container.appendChild(fragment);
+
+          this.setupFeedObserver();
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          this.updateUI();
+        }
+
+        createFeedItem(video, index) {
+          const item = document.createElement("article");
+          item.className = "slide-item";
+          item.dataset.index = String(index);
+          item.dataset.id = String(video.Id || "");
+          item.setAttribute("role", "article");
+          item.setAttribute("aria-label", "视频 " + (index + 1));
+
+          const posterSrc = this.getImageSrc(video);
+          item.innerHTML =
+            '<div class="w-full h-full relative bg-black">' +
+            '<img id="thumb-' + index + '" class="absolute inset-0 w-full h-full object-cover z-0 ' +
+            (this.state.isScaleFill ? "" : "opacity-0") +
+            '" alt="" loading="lazy" />' +
+            '<div id="poster-' + index + '" data-feed-poster="true" class="absolute inset-0 bg-cover bg-center scale-[1.15] blur-xl transition-opacity duration-300 z-0 ' +
+            (this.state.isScaleFill ? "opacity-0" : "opacity-70") +
+            '"></div>' +
+            '<div id="overlay-' + index + '" class="absolute inset-0 bg-black/40 transition-opacity duration-300 z-0 ' +
+            (this.state.isScaleFill ? "opacity-0" : "opacity-100") +
+            '"></div>' +
+            '<video id="video-p' + index + '" data-index="' + index +
+            '" class="video-fullscreen ' +
+            (this.state.isScaleFill ? "object-cover" : "object-contain") +
+            ' opacity-0 transition-opacity duration-500 z-10" playsinline webkit-playsinline muted preload="metadata"></video>' +
+            '<div class="touch-layer absolute inset-0 z-20" style="-webkit-touch-callout: none;"></div>' +
+            '<div id="playBtn-' + index + '" class="play-pause-btn">' +
+            '<i data-lucide="play" class="stroke-white w-8 h-8"></i></div></div>';
+
+          const thumb = item.querySelector("img");
+          thumb.dataset.posterSrc = posterSrc;
+          thumb.onerror = () => {
+            if (thumb.dataset.fallback !== "true") {
+              thumb.dataset.fallback = "true";
+              thumb.src = this.getImageSrc(null);
+            }
+          };
+          const poster = item.querySelector("[data-feed-poster]");
+          if (poster) poster.dataset.posterSrc = posterSrc;
+          return item;
+        }
+
+        updateFeedPosterLoading(centerIndex = this.state.currentIndex) {
+          if (this.state.viewMode !== "stream") return;
+          const keepIndexes = new Set(
+            [
+              centerIndex - 2,
+              centerIndex - 1,
+              centerIndex,
+              centerIndex + 1,
+              centerIndex + 2,
+            ].filter((index) => index >= 0 && index < this.state.videos.length),
+          );
+          this.dom.videoContainer
+            .querySelectorAll(".slide-item")
+            .forEach((item) => {
+              const index = Number(item.dataset.index);
+              const thumb = item.querySelector("img");
+              const poster = item.querySelector("[data-feed-poster]");
+              if (!thumb || !poster) return;
+              const posterSrc = thumb.dataset.posterSrc;
+              if (!posterSrc) return;
+
+              if (keepIndexes.has(index)) {
+                if (!thumb.getAttribute("src")) {
+                  thumb.dataset.fallback = "false";
+                  thumb.src = posterSrc;
+                }
+                if (!poster.style.backgroundImage)
+                  poster.style.backgroundImage = "url('" + posterSrc + "')";
+              } else {
+                thumb.removeAttribute("src");
+                thumb.dataset.fallback = "false";
+                poster.style.backgroundImage = "";
+              }
+            });
+        }
+
+        appendFeedItems(videos, startIndex) {
+          if (this.state.viewMode !== "stream") return;
+          const fragment = document.createDocumentFragment();
+          videos.forEach((video, offset) => {
+            fragment.appendChild(this.createFeedItem(video, startIndex + offset));
+          });
+          this.dom.videoContainer.appendChild(fragment);
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          if (this.feedObserver) {
+            this.dom.videoContainer
+              .querySelectorAll(".slide-item")
+              .forEach((item) => {
+                if (!item.dataset.observed) {
+                  this.feedObserver.observe(item);
+                  item.dataset.observed = "true";
+                }
+              });
+          }
+          lucide.createIcons();
+        }
+
+        getFeedItem(index) {
+          return this.dom.videoContainer?.querySelector(
+            '[data-index="' + index + '"]',
+          );
+        }
+
+        getVideoElement(index = this.state.currentIndex) {
+          return this.getFeedItem(index)?.querySelector("video") || null;
+        }
+
+        getPlayButton(index = this.state.currentIndex) {
+          return document.getElementById("playBtn-" + index);
+        }
+
+        disconnectFeedObserver() {
+          this.feedObserver?.disconnect();
+          this.feedObserver = null;
+          this.feedIntersectionRatios.clear();
+          if (this._feedScrollHandler) {
+            this.dom.videoContainer.removeEventListener(
+              "scroll",
+              this._feedScrollHandler,
+            );
+            this._feedScrollHandler = null;
+          }
+        }
+
+        setupFeedObserver() {
+          this.disconnectFeedObserver();
+          const container = this.dom.videoContainer;
+          const updateActiveFromRatios = () => {
+            let bestIndex = null;
+            let bestRatio = this.feedObserverThreshold;
+            this.feedIntersectionRatios.forEach((ratio, index) => {
+              if (ratio >= bestRatio && (bestIndex === null || ratio > bestRatio)) {
+                bestIndex = index;
+                bestRatio = ratio;
+              }
+            });
+
+            if (bestIndex === null) {
+              if (this.feedActiveIndex !== null) {
+                this.feedActivationToken += 1;
+                this.deactivateFeedItem(this.feedActiveIndex);
+                this.feedActiveIndex = null;
+                this.state.isPlaying = false;
+              }
+              return;
+            }
+            if (this.feedActiveIndex !== bestIndex)
+              this.activateFeedItem(bestIndex);
+          };
+
+          if ("IntersectionObserver" in window) {
+            this.feedObserver = new IntersectionObserver(
+              (entries) => {
+                entries.forEach((entry) => {
+                  const index = Number(entry.target.dataset.index);
+                  if (Number.isNaN(index)) return;
+                  const ratio = entry.intersectionRatio || 0;
+                  if (
+                    entry.isIntersecting &&
+                    ratio >= this.feedObserverThreshold
+                  )
+                    this.feedIntersectionRatios.set(index, ratio);
+                  else this.feedIntersectionRatios.delete(index);
+                });
+                updateActiveFromRatios();
+              },
+              {
+                root: container,
+                threshold: [0, this.feedObserverThreshold],
+              },
+            );
+            container
+              .querySelectorAll(".slide-item")
+              .forEach((item) => {
+                this.feedObserver.observe(item);
+                item.dataset.observed = "true";
+              });
+          } else {
+            this._feedScrollHandler = () => {
+              if (this._feedScrollFrame) return;
+              this._feedScrollFrame = requestAnimationFrame(() => {
+                this._feedScrollFrame = null;
+                const root = container.getBoundingClientRect();
+                this.feedIntersectionRatios.clear();
+                container.querySelectorAll(".slide-item").forEach((item) => {
+                  const rect = item.getBoundingClientRect();
+                  const visible = Math.max(
+                    0,
+                    Math.min(rect.bottom, root.bottom) -
+                      Math.max(rect.top, root.top),
+                  );
+                  const ratio = rect.height ? visible / rect.height : 0;
+                  if (ratio >= this.feedObserverThreshold)
+                    this.feedIntersectionRatios.set(
+                      Number(item.dataset.index),
+                      ratio,
+                    );
+                });
+                updateActiveFromRatios();
+              });
+            };
+            container.addEventListener("scroll", this._feedScrollHandler, {
+              passive: true,
+            });
+          }
+
+          requestAnimationFrame(() => {
+            if (this.state.viewMode === "stream") {
+              const current = this.getFeedItem(this.state.currentIndex);
+              current?.scrollIntoView({ behavior: "auto", block: "start" });
+              if (!this.feedObserver) this._feedScrollHandler?.();
+            }
+          });
+        }
+
+        async activateFeedItem(index) {
+          if (
+            this.state.viewMode !== "stream" ||
+            index < 0 ||
+            index >= this.state.videos.length
+          )
+            return;
+
+          const item = this.state.videos[index];
+          const previousIndex = this.feedActiveIndex;
+          if (previousIndex !== null && previousIndex !== index) {
+            const previousVideo = this.getVideoElement(previousIndex);
+            if (previousVideo) {
+              this.reportPlayback("stopped", previousVideo);
+              this.deactivateFeedItem(previousIndex);
+            }
+          }
+          this.feedActiveIndex = index;
+          this.state.currentIndex = index;
+          this.updateFeedPosterLoading(index);
+          this.state.playSessionId = "ex_" + Date.now().toString(16);
+          this.state.isPlaying = false;
+          this.updateUI();
+          this.updateTagButton(item);
+
+          document
+            .querySelectorAll("#videoContainer .slide-item video")
+            .forEach((video) => {
+              const videoIndex = Number(video.dataset.index);
+              if (videoIndex !== index) this.releaseVideoElement(video);
+            });
+
+          const activationToken = ++this.feedActivationToken;
+          const generation = await this.syncPlaybackSession(index);
+          if (
+            generation === false ||
+            activationToken !== this.feedActivationToken ||
+            this.feedActiveIndex !== index ||
+            this.state.viewMode !== "stream"
+          )
+            return;
+
+          const video = this.getVideoElement(index);
+          if (!video) return;
+          const src = this.getVideoSrc(item.Id, item);
+          if (video.dataset.mediaSrc !== src) {
+            video.dataset.mediaSrc = src;
+            video.src = src;
+            video.load();
+          }
+          video.muted = this.state.isMuted;
+          this.bindActiveVideo(video, index, item);
+          this.playVideo(index);
+        }
+
+        bindActiveVideo(video, index, item) {
+          video.onwaiting = () => {
+            clearTimeout(this._waitingTimer);
+            this._waitingTimer = setTimeout(
+              () => this.toggleLoading(true),
+              300,
+            );
+          };
+          video.onplaying = () => {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+            this.reportPlayback("playing", video);
+          };
+          video.oncanplay = () => {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+          };
+          if (video.readyState >= 3) {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+          }
+          video.ontimeupdate = () => {
+            if (video.duration) {
+              const pct = (video.currentTime / video.duration) * 100;
+              this.dom.progressLine.style.width = pct + "%";
+              this.dom.currentTime.textContent = this.formatTime(video.currentTime);
+              this.dom.totalTime.textContent = this.formatTime(video.duration);
+              this.reportPlayback("progress", video);
+            }
+          };
+          video.onpause = () => this.reportPlayback("progress", video);
+          video.onended = () => {
+            this.reportPlayback("stopped", video);
+            if (this.state.viewMode === "stream" && this.state.isAutoplay)
+              this.nextVideo();
+          };
+          video.onerror = () => {
+            if (this.feedActiveIndex !== index) return;
+            console.warn("视频播放失败，处理降级重试逻辑");
+            this.toggleLoading(false);
+            this.retryWithAltMode(index, item);
+          };
+          video.dataset.retryCount = "0";
+        }
+
+        deactivateFeedItem(index) {
+          const video = this.getVideoElement(index);
+          if (!video) return;
+          this.releaseVideoElement(video);
+          this.getPlayButton(index)?.classList.remove("paused");
+        }
+
+        releaseVideoElement(video) {
+          if (!video) return;
+          video.pause();
+          video.onerror = null;
+          video.onwaiting = null;
+          video.onplaying = null;
+          video.oncanplay = null;
+          video.ontimeupdate = null;
+          video.onpause = null;
+          video.onended = null;
+          video.style.opacity = "0";
+          video.removeAttribute("src");
+          video.removeAttribute("data-media-src");
+          video.load();
+          video.muted = true;
+        }
+
+        async syncPlaybackSession(index) {
+          const current = this.state.videos[index];
+          if (!current) return false;
+          const generation = ++this.state.playbackGeneration;
+          try {
+            const response = await fetch("/api/playback/session", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: this.config.playbackControlId,
+                generation,
+                currentId: current.Id,
+              }),
+            });
+            if (generation !== this.state.playbackGeneration) return false;
+            if (!response.ok)
+              throw new Error("播放会话同步失败: " + response.status);
+            return generation;
+          } catch (error) {
+            console.error(error);
+            this.showToast("无法建立播放会话");
+            return false;
+          }
+        }
+
+        playbackControlParams() {
+          return [
+            "PlaybackControlId=" +
+              encodeURIComponent(this.config.playbackControlId),
+            "PlaybackGeneration=" + this.state.playbackGeneration,
+          ];
+        }
+
+        prepareDownwardNext(index) {
+          const current = this.state.videos[index];
+          if (!current) return null;
+          const existing = this.state.preparedNext;
+          if (
+            existing?.currentId === current.Id &&
+            existing.currentIndex === index &&
+            this.state.videos[existing.nextIndex]?.Id === existing.nextId
+          ) {
+            return {
+              index: existing.nextIndex,
+              video: this.state.videos[existing.nextIndex],
+            };
+          }
+
+          let nextIndex = index + 1;
+          let picked = nextIndex;
+          if (this.state.playMode === "sequence") {
+            const group = this.getRandomGroupKey(current);
+            const candidates = this.state.videos
+              .map((video, candidateIndex) => ({ video, index: candidateIndex }))
+              .filter(
+                ({ video, index: candidateIndex }) =>
+                  candidateIndex !== index &&
+                  this.getRandomGroupKey(video) === group,
+              );
+            if (!candidates.length) return null;
+            nextIndex = index + 1 < this.state.videos.length ? index + 1 : 0;
+            picked = candidates[this.randomInt(candidates.length)].index;
+            [this.state.videos[picked], this.state.videos[nextIndex]] = [
+              this.state.videos[nextIndex],
+              this.state.videos[picked],
+            ];
+          } else if (nextIndex >= this.state.videos.length) {
+            return null;
+          }
+
+          const next = this.state.videos[nextIndex];
+          if (!next) return null;
+          this.syncFeedItemOrder(picked, nextIndex);
+          this.state.preparedNext = {
+            currentId: current.Id,
+            currentIndex: index,
+            nextId: next.Id,
+            nextIndex,
+          };
+          return { index: nextIndex, video: next };
+        }
+
+        syncFeedItemOrder(firstIndex, secondIndex) {
+          if (
+            this.state.viewMode !== "stream" ||
+            firstIndex === secondIndex
+          )
+            return;
+          const first = this.getFeedItem(firstIndex);
+          const second = this.getFeedItem(secondIndex);
+          if (!first || !second || first.parentElement !== second.parentElement)
+            return;
+          const parent = first.parentElement;
+          const marker = document.createComment("feed-swap");
+          parent.insertBefore(marker, first);
+          parent.insertBefore(first, second);
+          parent.insertBefore(second, marker);
+          marker.remove();
+          this.setFeedItemIndex(first, secondIndex);
+          this.setFeedItemIndex(second, firstIndex);
+          const currentRatio = this.feedIntersectionRatios.get(
+            this.feedActiveIndex,
+          );
+          this.feedIntersectionRatios.clear();
+          if (this.feedActiveIndex !== null && currentRatio !== undefined)
+            this.feedIntersectionRatios.set(this.feedActiveIndex, currentRatio);
+        }
+
+        setFeedItemIndex(item, index) {
+          item.dataset.index = String(index);
+          item.setAttribute("aria-label", "视频 " + (index + 1));
+          ["thumb-", "poster-", "overlay-", "video-p", "playBtn-"].forEach(
+            (prefix) => {
+              const element = item.querySelector("[id^='" + prefix + "']");
+              if (element) element.id = prefix + index;
+            },
+          );
+        }
+
+        syncFeedItemsToState() {
+          if (this.state.viewMode !== "stream") return;
+          const currentItems = [
+            ...this.dom.videoContainer.querySelectorAll(".slide-item"),
+          ];
+          if (!currentItems.length) return;
+          const byId = new Map(
+            currentItems.map((item) => [String(item.dataset.id), item]),
+          );
+          const fragment = document.createDocumentFragment();
+          this.state.videos.forEach((video, index) => {
+            const item =
+              byId.get(String(video.Id)) || this.createFeedItem(video, index);
+            this.setFeedItemIndex(item, index);
+            item.dataset.id = String(video.Id || "");
+            fragment.appendChild(item);
+          });
+          this.dom.videoContainer.appendChild(fragment);
+          this.setupFeedObserver();
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          this.updateUI();
+        }
+
+        armAutoplayUnlock() {
+          if (window._videosUnlocked) return;
+          const unlock = () => {
+            window._videosUnlocked = true;
+            document.removeEventListener("touchstart", unlock, true);
+            document.removeEventListener("click", unlock, true);
+            this.playVideo(this.state.currentIndex);
+          };
+          document.addEventListener("touchstart", unlock, {
+            once: true,
+            capture: true,
+          });
+          document.addEventListener("click", unlock, {
+            once: true,
+            capture: true,
+          });
+        }
+
+        playVideo(index) {
+          if (
+            this.state.viewMode !== "stream" ||
+            index !== this.state.currentIndex ||
+            this.feedActiveIndex !== index
+          )
+            return;
+          const video = this.getVideoElement(index);
+          const button = this.getPlayButton(index);
+          if (!video) return;
+          const playPromise = video.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                if (this.feedActiveIndex !== index) return;
+                this.state.isPlaying = true;
+                button?.classList.remove("paused");
+              })
+              .catch((error) => {
+                this.state.isPlaying = false;
+                this.toggleLoading(false);
+                button?.classList.add("paused");
+                if (error.name === "NotAllowedError") {
+                  this.armAutoplayUnlock();
+                  this.showToast("浏览器限制自动播放，请点击屏幕开始");
+                  const app = document.getElementById("app");
+                  if (app.classList.contains("interface-hidden")) {
+                    app.classList.remove("interface-hidden");
+                    this.showInterfaceTemp();
+                  }
+                }
+              });
+          }
+        }
+
+        retryWithAltMode(index, item) {
+          const v = this.getVideoElement();
+          if (!v) return;
+
+          const retryCount = parseInt(v.dataset.retryCount || "0");
+          // iOS 识别：Safari/WKWebView，以及 Mac 上 Safari（maxTouchPoints > 1）
+          const isIOS =
+            /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+          v.dataset.retryCount = String(retryCount + 1);
+
+          if (this.config.useStatic) {
+            // ── 直接播放模式下的回退链 ────────────────────────────────
+            // 修改回退链步数：iOS 三步 / 非 iOS 两步
+            if (isIOS) {
+              // iOS 降级链：Direct Play → Direct Stream → HLS 转码
+              if (retryCount === 0) {
+                // Step 1: Direct Stream（直接串流：只转封装不重编，速度最快）
+                // 补全 VideoCodec 声明，防止 Emby 误判定为不支持 hevc 而触发重编码
+                const { server, token } = this.config;
+                const deviceId = this.config.deviceId || "ShuffleBox-Device";
+                this.showToast("iOS 直接串流...");
+                const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AudioCodec=aac,mp3,ac3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+                v.src = `${server}/emby/Videos/${item.Id}/stream.mp4?${params}`;
+                v.load();
+                this.playVideo(index);
+              } else if (retryCount === 1) {
+                // Step 2: HLS 转码（兼容所有编码的兜底方案）
+                this.showToast("iOS 兼容播放...");
+                v.src = this._buildHlsSrc(item.Id, item);
+                v.load();
+                this.playVideo(index);
+              } else {
+                this.toggleLoading(false);
+                this.showToast("播放失败，请检查 Emby 设置");
+              }
+            } else {
+              // 非 iOS 降级链：Direct Play → Direct Stream
+              if (retryCount === 0) {
+                const { server, token } = this.config;
+                const deviceId = this.config.deviceId || "ShuffleBox-Device";
+                this.showToast("尝试直接串流...");
+                const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+                v.src = `${server}/emby/Videos/${item.Id}/stream.mp4?${params}`;
+                v.load();
+                this.playVideo(index);
+              } else if (retryCount === 1) {
+                this.showToast("兼容转码播放...");
+                v.src = this._buildHlsSrc(item.Id, item);
+                v.load();
+                this.playVideo(index);
+              } else {
+                this.toggleLoading(false);
+                this.showToast("播放失败，请检查视频编码");
+              }
+            }
+          } else {
+            // ── 转码模式（HLS）失败，无更多降级选项 ───────────────────
+            this.toggleLoading(false);
+            this.showToast("转码失败，请检查 Emby 设置");
+          }
+        }
+
+        // HLS master.m3u8 构造逻辑，处理 MediaSource 兼容性
+        _buildHlsSrc(id, mediaItem) {
+          const { server, token } = this.config;
+          const mediaSourceId = mediaItem?.MediaSources?.[0]?.Id || "";
+          // 每次播放生成唯一会话 ID，保证 Emby 不复用旧的转码任务
+          const playSessionId =
+            this.state.playSessionId || "hls_" + id + "_" + Date.now();
+          const deviceId = this.config.deviceId || "ShuffleBox-Device";
+
+          const params = [
+            `api_key=${token}`,
+            mediaSourceId ? `MediaSourceId=${mediaSourceId}` : "",
+            `DeviceId=${deviceId}`,
+            `PlaySessionId=${playSessionId}`,
+            `VideoCodec=h264`, // 只声明 h264：hevc/av1/等会被强制转码为 h264
+            `AudioCodec=aac,mp3,ac3`,
+            `VideoBitrate=20000000`,
+            `AudioBitrate=320000`,
+            `TranscodingMaxAudioChannels=2`,
+            `SegmentContainer=ts`, // 锁定为 ts：解决 h264 源文件在 fMP4/mp4 容器下 HLS 播放失败的问题
+            `MinSegments=1`,
+            `BreakOnNonKeyFrames=True`,
+            `AllowVideoStreamCopy=true`, // h264 源文件：直接 remux，不重编（节省资源）
+            `AllowAudioStreamCopy=true`, // aac 音频：直接 copy；其他音频：转为 aac
+            ...this.playbackControlParams(),
+            // 不加 EnableAutoStreamCopy：避免 Emby 绕过 HLS 分片直接走流传输
+          ]
+            .filter(Boolean)
+            .join("&");
+
+          return `${server}/emby/Videos/${id}/master.m3u8?${params}`;
+        }
+
+        togglePlay() {
+          const v = this.getVideoElement();
+          const btn = this.getPlayButton();
+          if (!v) return;
+
+          if (v.paused) {
+            v.play();
+            this.state.isPlaying = true;
+            if (btn) btn.classList.remove("paused");
+          } else {
+            v.pause();
+            this.state.isPlaying = false;
+            if (btn) btn.classList.add("paused");
+          }
+        }
+
+        prevVideo() {
+          if (this.state.currentIndex === 0) {
+            return;
+          }
+          this.switchSlide(this.state.currentIndex - 1, "down");
+        }
+
+        switchSlide(newIndex) {
+          if (
+            this.state.viewMode !== "stream" ||
+            newIndex < 0 ||
+            newIndex >= this.state.videos.length
+          )
+            return;
+
+          const target = this.getFeedItem(newIndex);
+          if (!target) return;
+          if (
+            newIndex >= this.state.videos.length - 5 &&
+            this.state.videos.length < (this.state.totalCount || 999999)
+          ) {
+            if (!this._fetchingAppend) {
+              this._fetchingAppend = true;
+              this.fetchVideos(
+                null,
+                null,
+                false,
+                this.state.playMode === "random",
+                true,
+              ).finally(() => {
+                this._fetchingAppend = false;
+              });
+            }
+          }
+          this.dom.videoContainer.scrollTo({
+            top: target.offsetTop,
+            behavior: "smooth",
+          });
+          this.updateFeedPosterLoading(newIndex);
+        }
+
+
+        reportPlayback(event, videoEl) {
+          if (
+            !this.config.server ||
+            !this.config.token ||
+            this.state.videos.length === 0
+          )
+            return;
+
+          const now = Date.now();
+
+          if (
+            event === "progress" &&
+            now - (this.state.lastReportTime || 0) < 5000
+          )
+            return;
+          if (event === "progress") this.state.lastReportTime = now;
+
+          const videoData = this.state.videos[this.state.currentIndex];
+          if (!videoData || !videoEl) return;
+
+          const eventMap = {
+            playing: "TimeUpdate",
+            progress: "TimeUpdate",
+            stopped: "Stopped",
+          };
+
+          const eventName = videoEl.paused
+            ? "Pause"
+            : eventMap[event] || "TimeUpdate";
+          const mediaSourceId = videoData.MediaSources?.[0]?.Id || "";
+
+          if (event === "playing") {
+            this.reportCapabilities();
+          }
+
+          const ticks = Math.floor(videoEl.currentTime * 10000000);
+
+          let endpoint = "/Sessions/Playing";
+          if (event === "progress") endpoint = "/Sessions/Playing/Progress";
+          if (event === "stopped") endpoint = "/Sessions/Playing/Stopped";
+
+          const payload = {
+            ItemId: videoData.Id,
+            PositionTicks: ticks,
+            IsPaused: videoEl.paused || event === "stopped",
+            IsMuted: videoEl.muted,
+            VolumeLevel: Math.floor(videoEl.volume * 100),
+            PlayMethod: this.config.useStatic ? "DirectPlay" : "Transcode",
+            EventName: eventName,
+            CanSeek: true,
+            PlaySessionId: this.state.playSessionId,
+            QueueableMediaTypes: ["Video"],
+          };
+          if (mediaSourceId) payload.MediaSourceId = mediaSourceId;
+
+          fetch(
+            `${this.config.server}/emby${endpoint}?api_key=${this.config.token}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+              },
+              body: JSON.stringify(payload),
+            },
+          ).catch(() => {});
+        }
+
+        reportCapabilities() {
+          const { server, token } = this.config;
+          if (!server || !token) return;
+          fetch(`${server}/emby/Sessions/Capabilities/Full?api_key=${token}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+            },
+            body: JSON.stringify({
+              PlayableMediaTypes: ["Video"],
+              SupportsMediaControl: true,
+              SupportsPersistentConnections: false,
+            }),
+          }).catch(() => {});
+        }
+
+        // --- 辅助功能 ---
+
+        getVideoSrc(id, mediaItem) {
+          const { server, token, useStatic } = this.config;
+
+          // 获取视频流元数据（用于智能判定）
+          const mediaSource = mediaItem?.MediaSources?.[0];
+          const codec = (mediaSource?.VideoCodec || "").toLowerCase();
+          const container = (mediaSource?.Container || "").toLowerCase();
+          const codecTag = (mediaSource?.VideoCodecTag || "").toLowerCase(); // 获取编码标签 (如 hev1/hvc1)
+
+          // 智能判定：若是 h264/mp4，则无论是否勾选转码都优先直连，避免冗余 HLS
+          const isNativeCompatible =
+            codec === "h264" &&
+            (container.includes("mp4") || container.includes("m4v"));
+
+          if (!useStatic && !isNativeCompatible) {
+            // 只有在【不勾选直接播放】且【视频非 h264+mp4】时，才走 HLS 强制转码
+            return this._buildHlsSrc(id, mediaItem);
+          }
+
+          // ── 设备兼容性判定 (苹果生态历史遗留问题处理) ─────────────────────
+          const isIOS =
+            /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+          // 特殊拦截：如果是 iOS 且是 hevc 编码且标签是苹果不支持的 hev1 (Safari 仅原生支持 hvc1)
+          // 这种视频直连(Static)必只有声音无画面，主动帮它走“直接串流(Direct Stream)”进行容器修正
+          if (isIOS && codec === "hevc" && codecTag === "hev1") {
+            const deviceId = this.config.deviceId || "ShuffleBox-Device";
+            // 使用 stream.mp4 并允许 Copy。Emby 会自动执行 Remux (hev1 -> hvc1)，不重编码，画质无损。
+            const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AudioCodec=aac,mp3,ac3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+            return `${server}/emby/Videos/${id}/stream.mp4?${params}`;
+          }
+
+          // ── 原画直连 (Direct Play) ──────────────────────────────────
+          // 余下所有情况（非苹果设备、或是 hvc1、或是 h264）保持最高优先级直连，支持后端状态追踪
+          const playSessionId =
+            this.state.playSessionId || "ex_" + Date.now().toString(16);
+          const deviceId = this.config.deviceId || "ShuffleBox-Device";
+          const msId = mediaSource?.Id || "";
+
+          const params = [
+            `api_key=${token}`,
+            `Static=true`,
+            msId ? `MediaSourceId=${msId}` : "",
+            `DeviceId=${deviceId}`,
+            `PlaySessionId=${playSessionId}`,
+            ...this.playbackControlParams(),
+          ]
+            .filter(Boolean)
+            .join("&");
+
+          return `${server}/emby/Videos/${id}/stream?${params}`;
+        }
+
+        getImageSrc(video) {
+          const { server, token } = this.config;
+          // 优先加载同目录的定制封面图
+          const fallbackUrl = "./poster.webp";
+
+          if (typeof video === "object" && video !== null) {
+            if (video.ImageTags && video.ImageTags.Primary) {
+              return `${server}/emby/Items/${video.Id}/Images/Primary?api_key=${token}`;
+            }
+            return fallbackUrl;
+          }
+
+          // 此时传入的是纯 ID 字符串（旧逻辑残留处理）
+          if (!video) return fallbackUrl;
+          return `${server}/emby/Items/${video}/Images/Primary?api_key=${token}`;
+        }
+
+        updateLibraryCardSelection() {
+          const selected = new Set(
+            String(this.state.currentLibraryId || "").split(",").filter(Boolean),
+          );
+          document.querySelectorAll("[data-library-id]").forEach((card) => {
+            const active = selected.has(card.dataset.libraryId);
+            card.className = `focusable-item col-span-1 p-2.5 rounded cursor-pointer text-sm flex items-center gap-2 ${active ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+            const check = card.querySelector(".selection-check");
+            if (check) check.classList.toggle("hidden", !active);
+          });
+        }
+
+        async renderMediaTree() {
+          const target = document.getElementById("mediaTree");
+          const selected = new Set(
+            String(this.state.currentLibraryId || "").split(",").filter(Boolean),
+          );
+          if (!selected.size) {
+            target.classList.add("hidden");
+            return;
+          }
+          try {
+            const response = await fetch("/api/media/tree");
+            const data = await response.json();
+            const escape = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+            const renderNode = (node, depth = 0) => {
+              const hasChildren = node.children?.length > 0;
+              const collapsed = this.state.collapsedGroupPaths.has(node.path);
+              const icon = hasChildren ? (collapsed ? "folder" : "folder-open") : "folder";
+              const toggle = hasChildren
+                ? `<button data-tree-path="${escape(node.path)}" class="w-5 h-5 shrink-0 rounded border border-primary/50 text-primary leading-none">${collapsed ? "+" : "−"}</button>`
+                : '<span class="w-5 shrink-0"></span>';
+              const note = hasChildren
+                ? (collapsed ? "合并为 1 个随机组" : `${node.children.length} 个子文件夹 · 分别随机`)
+                : `${node.count} 个视频`;
+              const children = hasChildren && !collapsed
+                ? `<div class="ml-3 pl-3 border-l border-white/10">${node.children.map((child) => renderNode(child, depth + 1)).join("")}</div>`
+                : "";
+              return `<div class="py-1"><div class="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 text-sm"><span>${toggle}</span><i data-lucide="${icon}" class="w-4 h-4 shrink-0 text-primary"></i><span class="truncate">${escape(node.name)}</span><span class="ml-auto text-[11px] text-gray-500 whitespace-nowrap">${note}</span></div>${children}</div>`;
+            };
+            const roots = (data.Items || []).filter((root) => selected.has(root.id));
+            if (!roots.length) {
+              target.classList.add("hidden");
+              return;
+            }
+            target.innerHTML = `<div class="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between"><span class="text-sm font-medium text-gray-200">文件树</span><span class="text-[11px] text-primary">折叠目录将合并随机</span></div><div class="p-2">${roots.map((root) => `<div class="px-2 py-2 text-sm font-medium text-gray-300"><i data-lucide="server" class="inline w-4 h-4 shrink-0 mr-2 text-primary"></i>${escape(root.name)}<span class="text-xs text-gray-500 ml-2">${root.count} 个视频</span></div><div class="ml-2 pl-2 border-l border-white/10">${root.children.map((child) => renderNode(child)).join("")}</div>`).join("")}</div>`;
+            target.classList.remove("hidden");
+            target.querySelectorAll("[data-tree-path]").forEach((button) => {
+              button.onclick = (event) => {
+                event.stopPropagation();
+                const treePath = button.dataset.treePath;
+                if (this.state.collapsedGroupPaths.has(treePath)) this.state.collapsedGroupPaths.delete(treePath);
+                else this.state.collapsedGroupPaths.add(treePath);
+                localStorage.setItem("shufflebox_collapsed_group_paths", JSON.stringify([...this.state.collapsedGroupPaths]));
+                this.renderMediaTree();
+              };
+            });
+            lucide.createIcons();
+          } catch {
+            target.classList.add("hidden");
+          }
+        }
+
+        async showLibraries() {
+          this.toggleLoading(true);
+          const list = document.getElementById("librariesList");
+          list.innerHTML = "";
+          // 先打开面板，再异步加载数据，避免网络延迟造成突然闪现。
+          this.toggleModal("libraryModal", true);
+
+          try {
+            const userId = this.config.userId;
+
+            const playlistsRes = await fetch(
+              `${this.config.server}/emby/Users/${userId}/Items?Recursive=true&IncludeItemTypes=Playlist&api_key=${this.config.token}`,
+              {
+                headers: {
+                  "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+                },
+              },
+            );
+            const playlistsData = await playlistsRes.json();
+
+            const viewsRes = await fetch(
+              `${this.config.server}/emby/Users/${userId}/Views?api_key=${this.config.token}`,
+              {
+                headers: {
+                  "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+                },
+              },
+            );
+            const viewsDataRaw = viewsRes.ok
+              ? await viewsRes.json()
+              : { Items: [] };
+
+            // 缓存完整的视图和列表数据供网格模式提取名称
+            localStorage.setItem(
+              "shufflebox_views_cache",
+              JSON.stringify({ playlists: playlistsData, views: viewsDataRaw }),
+            );
+
+            // 过滤掉基于特定收集方式的视图避免重叠
+            const filteredViews = viewsDataRaw.Items
+              ? viewsDataRaw.Items.filter(
+                  (item) =>
+                    item.CollectionType !== "playlists" &&
+                    item.CollectionType !== "boxsets",
+                )
+              : [];
+
+            const favDiv = document.createElement("div");
+            const isFavSelected = this.state.currentLibraryId === "favorites";
+            favDiv.setAttribute("tabindex", "0");
+            favDiv.className = `focusable-item col-span-1 p-2 rounded cursor-pointer text-sm flex items-center gap-1.5 ${isFavSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+            favDiv.innerHTML = `<i data-lucide="folder-heart" class="w-4 h-4"></i><span class="flex-1 truncate">收藏夹</span>${isFavSelected ? '<i data-lucide="check" class="w-3.5 h-3.5"></i>' : ""}`;
+            favDiv.onclick = () => {
+              this.state.currentLibraryId = "favorites";
+              this.state.currentLibraryType = "favorites";
+              localStorage.setItem("shufflebox_lib_id", "favorites");
+              localStorage.setItem("shufflebox_lib_type", "favorites");
+              this.state.currentTab = "favorites";
+              if (this.state.favorites.size === 0) {
+                this.showToast("暂无收藏");
+                return;
+              }
+              this.fetchVideos(null, null, false, this.state.playMode === "random");
+              this.toggleModal("libraryModal", false);
+            };
+            list.appendChild(favDiv);
+
+            if (
+              playlistsData &&
+              playlistsData.Items &&
+              playlistsData.Items.length > 0
+            ) {
+              const headerPl = document.createElement("div");
+              headerPl.className =
+                "col-span-3 text-xs text-gray-500 mt-2 mb-1 pl-1";
+              headerPl.textContent = "播放列表";
+              list.appendChild(headerPl);
+
+              playlistsData.Items.forEach((pl) => {
+                const div = document.createElement("div");
+                const isSelected = pl.Id === this.state.currentLibraryId;
+                div.setAttribute("tabindex", "0");
+                div.className = `focusable-item col-span-1 p-2 rounded cursor-pointer text-sm flex items-center gap-1.5 ${isSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+                div.innerHTML = `<i data-lucide="list-video" class="w-4 h-4 flex-shrink-0"></i><span class="flex-1 truncate">${pl.Name}</span>${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 flex-shrink-0"></i>' : ""}`;
+                div.onclick = () => {
+                  this.state.currentLibraryId = pl.Id;
+                  this.state.currentLibraryType = "playlist";
+                  localStorage.setItem("shufflebox_lib_id", pl.Id);
+                  localStorage.setItem("shufflebox_lib_type", "playlist");
+                  this.state.currentTab = "home";
+                  this.updateTabHighlight();
+                  this.fetchVideos(pl.Id, null, false, this.state.playMode === "random");
+                  this.toggleModal("libraryModal", false);
+                };
+                list.appendChild(div);
+              });
+            }
+
+            if (filteredViews && filteredViews.length > 0) {
+              const headerLib = document.createElement("div");
+              headerLib.className =
+                "col-span-3 text-xs text-gray-500 mt-2 mb-1 pl-1";
+              headerLib.textContent = "媒体库";
+              list.appendChild(headerLib);
+
+              filteredViews.forEach((lib) => {
+                const div = document.createElement("div");
+                const selectedIds = new Set(String(this.state.currentLibraryId || "").split(",").filter(Boolean));
+                const isSelected = selectedIds.has(lib.Id);
+                let iconName = "clapperboard";
+                if (lib.CollectionType === "tvshows") iconName = "tv";
+                else if (lib.CollectionType === "homevideos")
+                  iconName = "video";
+                else if (lib.CollectionType === "musicvideos")
+                  iconName = "cassette-tape";
+                else if (lib.CollectionType === "boxsets") iconName = "archive";
+
+                div.setAttribute("tabindex", "0");
+                div.dataset.libraryId = lib.Id;
+                div.className = `focusable-item col-span-1 p-2 rounded cursor-pointer text-sm flex items-center gap-1.5 ${isSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+                div.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span class="flex-1 truncate">${lib.Name}</span><i data-lucide="check" class="selection-check w-3.5 h-3.5 flex-shrink-0 ${isSelected ? "" : "hidden"}"></i>`;
+                div.onclick = () => {
+                  const nextSelected = new Set(
+                    String(this.state.currentLibraryId || "").split(",").filter(Boolean),
+                  );
+                  if (nextSelected.has(lib.Id)) nextSelected.delete(lib.Id);
+                  else nextSelected.add(lib.Id);
+                  this.state.currentLibraryId = [...nextSelected].join(",");
+                  this.state.currentLibraryType = "library";
+                  localStorage.setItem("shufflebox_lib_id", this.state.currentLibraryId);
+                  localStorage.setItem("shufflebox_lib_type", "library");
+                  this.updateLibraryCardSelection();
+                  this.renderMediaTree();
+                };
+                list.appendChild(div);
+              });
+            }
+
+            await this.renderMediaTree();
+            lucide.createIcons();
+            this.toggleModal("libraryModal", true);
+          } catch (e) {
+            console.error("获取媒体库失败:", e);
+            this.showToast("获取媒体库失败");
+
+            const favDiv = document.createElement("div");
+            favDiv.className =
+              "p-3 rounded mb-2 cursor-pointer text-sm flex items-center gap-3 bg-gray-800 text-white";
+            favDiv.innerHTML = `<i data-lucide="folder-heart" class="w-5 h-5"></i><span class="flex-1">收藏夹</span>`;
+            favDiv.onclick = () => {
+              if (this.state.favorites.size === 0) {
+                this.showToast("暂无收藏");
+                return;
+              }
+              this.state.currentLibraryId = "favorites";
+              this.state.currentLibraryType = "favorites";
+              localStorage.setItem("shufflebox_lib_id", "favorites");
+              localStorage.setItem("shufflebox_lib_type", "favorites");
+              this.fetchVideos(null, null, false, this.state.playMode === "random");
+              this.toggleModal("libraryModal", false);
+            };
+            list.appendChild(favDiv);
+
+            lucide.createIcons();
+            this.toggleModal("libraryModal", true);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async toggleFavorite() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+          const id = String(item.Id);
+          // 以 Emby API 的 UserData.IsFavorite 为单一数据源
+          if (!item.UserData) item.UserData = {};
+          const isFav = item.UserData.IsFavorite === true;
+          const { server, token, userId } = this.config;
+
+          // 乐观更新：先修改内存和 UI
+          item.UserData.IsFavorite = !isFav;
+          if (!isFav) {
+            this.state.favorites.add(id);
+            this.showToast("❤️ 已收藏");
+          } else {
+            this.state.favorites.delete(id);
+            this.showToast("取消收藏");
+          }
+          this.updateUI();
+
+          // 远端同步 Emby API
+          if (server && token && userId) {
+            try {
+              const method = isFav ? "DELETE" : "POST";
+              const res = await fetch(
+                `${server}/emby/Users/${userId}/FavoriteItems/${id}?api_key=${token}`,
+                { method },
+              );
+              if (!res.ok) {
+                // 远端失败，回滚内存状态
+                item.UserData.IsFavorite = isFav;
+                if (isFav) this.state.favorites.add(id);
+                else this.state.favorites.delete(id);
+                this.updateUI();
+                this.showToast("操作失败，请重试");
+              }
+            } catch (e) {
+              console.error("收藏同步失败:", e);
+            }
+          }
+        }
+
+        // --- UI 更新与交互 ---
+
+        updateUI() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (item) {
+            this.dom.videoTitle.textContent = item.Name;
+            this.dom.videoDescription.textContent = item.Overview || "暂无简介";
+
+            const favBtn = document.getElementById("favoriteBtn");
+            // 以 Emby API 返回的 UserData.IsFavorite 为单一数据源
+            const isFav = item.UserData?.IsFavorite === true;
+            favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="${isFav ? "text-secondary fill-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            // 定向更新：只扫描 favBtn 内部，不全局扫描 DOM
+            lucide.createIcons({ nameAttr: "data-lucide", nodes: [favBtn] });
+          }
+        }
+
+        updateTabHighlight() {
+          [
+            this.dom.myBtn,
+            this.dom.libraryBtn,
+            this.dom.playModeBtn,
+            this.dom.viewModeBtn,
+          ].forEach((btn) => {
+            if (btn) {
+              btn.classList.add("text-gray-400");
+              btn.classList.remove("text-white");
+            }
+          });
+        }
+
+        toggleAutoplay() {
+          const app = document.getElementById("app");
+          if (app.classList.contains("interface-hidden")) {
+            app.classList.remove("interface-hidden");
+          } else {
+            app.classList.add("interface-hidden");
+          }
+        }
+
+        toggleDeleteMode() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          this.dom.deleteFileName.textContent =
+            "确认删除 " + (item.Name || "此视频") + " 吗？";
+          this.toggleModal("deleteConfirmModal", true);
+          lucide.createIcons();
+        }
+
+        async executeDelete() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          try {
+            // 注意：Emby 删除 API 需要管理员账号，普通用户会返回 403
+            // 必须检查 res.ok，否则 403/404 也会被当成成功处理，导致前端假删除
+            const res = await fetch(
+              `${this.config.server}/emby/Items/${item.Id}?api_key=${this.config.token}`,
+              {
+                method: "DELETE",
+              },
+            );
+
+            if (!res.ok) {
+              // 403：账号无管理权限；404：视频已不存在（也从列表移除）
+              if (res.status === 403) {
+                this.showToast("❌ 权限不足，请使用管理员账号");
+                this.toggleModal("deleteConfirmModal", false);
+                return;
+              }
+              if (res.status !== 404) {
+                this.showToast(`❌ 删除失败 (${res.status})`);
+                this.toggleModal("deleteConfirmModal", false);
+                return;
+              }
+              // 404 视为已删除，继续从列表移除
+            }
+
+            this.showToast("✅ 已删除");
+            this.state.videos.splice(this.state.currentIndex, 1);
+            this.toggleModal("deleteConfirmModal", false);
+
+            if (this.state.viewMode === "grid") {
+              this.renderGridView();
+            } else {
+              // 如果删的是最后一个，回到上一个
+              if (this.state.currentIndex >= this.state.videos.length) {
+                this.state.currentIndex = Math.max(
+                  0,
+                  this.state.videos.length - 1,
+                );
+              }
+              this.renderSlides();
+            }
+          } catch (e) {
+            this.showToast("❌ 删除失败：网络错误");
+            this.toggleModal("deleteConfirmModal", false);
+          }
+        }
+
+        showInterfaceTemp() {
+          const app = document.getElementById("app");
+          if (this.csTimer) clearTimeout(this.csTimer);
+
+          // 只有在流模式且处于全屏状态，且界面当前处于显示状态，
+          // 且当前没有任何弹窗遮罩时，才开启自动隐藏计时。
+          if (this.state.viewMode === "grid") return;
+          if (this.isAnyModalOpen()) return;
+
+          if (
+            (document.fullscreenElement ||
+              app.classList.contains("ios-pwa-fullscreen")) &&
+            !app.classList.contains("interface-hidden")
+          ) {
+            // 全局自动清屏倒计时：默认五秒 (5000ms)
+            // 注释：如果你想修改清屏等待时长，请修改下方的 5000 数值
+            this.csTimer = setTimeout(() => {
+              app.classList.add("interface-hidden");
+            }, 5000);
+          }
+        }
+
+        createShuffleSeed() {
+          if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+          if (window.crypto?.getRandomValues) {
+            const values = new Uint32Array(4);
+            window.crypto.getRandomValues(values);
+            return [...values].map((value) => value.toString(16).padStart(8, "0")).join("");
+          }
+          return `${Date.now()}-${performance.now()}-${Math.random()}`;
+        }
+
+        // 随机模式：按目录逐轮各取一个，保持 currentIndex 不变。
+        // 这样 +1 下一个就是随机视频，Feed item 顺序与业务数组保持一致。
+        _shuffleAroundCurrent() {
+          const idx = this.state.currentIndex;
+          const cur = this.state.videos[idx];
+          // Keep collapsed folders as one random group on the client as well.
+          // This covers switching to random mode without a network reload.
+          const groups = [...this.state.collapsedGroupPaths];
+          const buckets = new Map();
+          for (const video of this.state.videos) {
+            const directory = String(video.Path || "").replaceAll("\\", "/").split("/").slice(0, -1).join("/");
+            const root = groups
+              .filter((path) => directory === path || directory.startsWith(`${path}/`))
+              .sort((a, b) => b.length - a.length)[0];
+            const key = root || directory;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(video);
+          }
+          for (const bucket of buckets.values()) {
+            for (let i = bucket.length - 1; i > 0; i--) {
+              const j = this.randomInt(i + 1);
+              [bucket[i], bucket[j]] = [bucket[j], bucket[i]];
+            }
+          }
+          const shuffled = [];
+          let previousKey = null;
+          while (buckets.size) {
+            const keys = [...buckets.keys()];
+            for (let i = keys.length - 1; i > 0; i--) {
+              const j = this.randomInt(i + 1);
+              [keys[i], keys[j]] = [keys[j], keys[i]];
+            }
+            if (keys.length > 1 && keys[0] === previousKey) {
+              const swapAt = 1 + this.randomInt(keys.length - 1);
+              [keys[0], keys[swapAt]] = [keys[swapAt], keys[0]];
+            }
+            for (const key of keys) {
+              const bucket = buckets.get(key);
+              shuffled.push(bucket.pop());
+              previousKey = key;
+              if (!bucket.length) buckets.delete(key);
+            }
+          }
+          this.state.videos = shuffled;
+          // 将当前视频放回其在数组中的原位置
+          const newPos = this.state.videos.findIndex((v) => v.Id === cur.Id);
+          [this.state.videos[newPos], this.state.videos[idx]] = [
+            this.state.videos[idx],
+            this.state.videos[newPos],
+          ];
+        }
+
+        randomInt(max) {
+          if (!Number.isInteger(max) || max <= 0) return 0;
+          if (window.crypto?.getRandomValues) {
+            const limit = 0x100000000 - (0x100000000 % max);
+            const values = new Uint32Array(1);
+            do window.crypto.getRandomValues(values); while (values[0] >= limit);
+            return values[0] % max;
+          }
+          return Math.floor(Math.random() * max);
+        }
+
+        getRandomGroupKey(video) {
+          const directory = String(video?.Path || "").replaceAll("\\", "/").split("/").slice(0, -1).join("/");
+          const collapsedRoot = [...this.state.collapsedGroupPaths]
+            .filter((path) => directory === path || directory.startsWith(`${path}/`))
+            .sort((a, b) => b.length - a.length)[0];
+          return collapsedRoot || directory;
+        }
+
+        togglePlayMode() {
+          if (this.config.shortDrama) {
+            this.showToast("ℹ️ 短剧模式已锁定顺序播放");
+            return;
+          }
+          const isSeq = this.state.playMode === "sequence";
+          this.state.playMode = isSeq ? "random" : "sequence";
+          this.state.preparedNext = null;
+          localStorage.setItem("shufflebox_play_mode", this.state.playMode);
+
+          const btn = this.dom.playModeBtn;
+          btn.innerHTML = `<i data-lucide="${isSeq ? "shuffle" : "repeat"}" class="stroke-current w-5 h-5"></i>`;
+          lucide.createIcons();
+
+          if (isSeq) {
+            // 切换随机：保存原始列表，就地洗牌
+            // currentIndex/当前 Feed item 不变，当前视频完全不受干扰
+            this.state.originalVideos = [...this.state.videos];
+            this._shuffleAroundCurrent();
+            this.syncFeedItemsToState();
+            this.showToast("全局随机播放");
+          } else {
+            // 切回顺序：恢复原始列表，将当前视频对换到 currentIndex 位置
+            // 确保当前 Feed item 不变、currentIndex 不变，当前播放零干扰
+            const curId = this.state.videos[this.state.currentIndex]?.Id;
+            this.state.videos = [...this.state.originalVideos];
+            this.state.originalVideos = [];
+            if (curId) {
+              const origPos = this.state.videos.findIndex(
+                (v) => String(v.Id) === String(curId),
+              );
+              if (origPos >= 0 && origPos !== this.state.currentIndex) {
+                [
+                  this.state.videos[origPos],
+                  this.state.videos[this.state.currentIndex],
+                ] = [
+                  this.state.videos[this.state.currentIndex],
+                  this.state.videos[origPos],
+                ];
+              }
+            }
+            this.syncFeedItemsToState();
+            this.showToast("类内随机播放");
+          }
+        }
+
+        // “顺序”图标模式：在当前类内随机；折叠目录会把子目录合为同一类。
+        nextVideo() {
+          if (this.state.playMode === "sequence") {
+            const prepared = this.prepareDownwardNext(this.state.currentIndex);
+            if (!prepared)
+              return this.showToast("当前类中没有其他视频");
+            this.switchSlide(prepared.index, "up");
+            return;
+          }
+          const nextIndex = this.state.currentIndex + 1;
+          if (nextIndex >= this.state.videos.length) {
+            this.showToast("已经是最后一个视频了");
+            return;
+          }
+          this.switchSlide(nextIndex, "up");
+        }
+
+        toggleViewMode() {
+          const isStream = this.state.viewMode === "stream";
+          this.state.viewMode = isStream ? "grid" : "stream";
+
+          const btn = this.dom.viewModeBtn;
+          btn.innerHTML = `<i data-lucide="${this.state.viewMode === "stream" ? "gallery-vertical" : "layout-grid"}" class="stroke-current w-5 h-5"></i>`;
+
+          lucide.createIcons();
+
+          if (this.state.viewMode === "grid") {
+            // 无限流切格子的神之一手：重算页码对齐
+            const PAGE_SIZE = 20;
+            if (this.state.videos.length > PAGE_SIZE) {
+              const pageIndex = Math.floor(this.state.currentIndex / PAGE_SIZE);
+              const start = pageIndex * PAGE_SIZE;
+              this.state.videos = this.state.videos.slice(
+                start,
+                start + PAGE_SIZE,
+              );
+              this.state.currentIndex = this.state.currentIndex % PAGE_SIZE;
+              this.state.startIndex = (this.state.startIndex || 0) + start;
+            }
+
+            const app = document.getElementById("app");
+            if (app) {
+              app.classList.remove("interface-hidden");
+              app.classList.add("grid-active"); // 特殊清屏状态：只留底部栏
+              if (this.csTimer) clearTimeout(this.csTimer);
+            }
+            this.dom.videoContainer.style.touchAction = "auto";
+            this.renderGridView();
+          } else {
+            const app = document.getElementById("app");
+            if (app) app.classList.remove("grid-active");
+            this.dom.videoContainer.style.touchAction = "pan-y";
+            this.renderSlides();
+            // 切回流模式后重新开启自动清屏计时
+            this.showInterfaceTemp();
+          }
+        }
+
+        toggleScaleMode() {
+          this.state.isScaleFill = false;
+          localStorage.setItem("shufflebox_is_scale_fill", this.state.isScaleFill);
+          const videos = document.querySelectorAll(".video-fullscreen");
+          videos.forEach((v, index) => {
+            v.classList.remove("object-cover", "object-contain");
+            v.classList.add(
+              this.state.isScaleFill ? "object-cover" : "object-contain",
+            );
+
+            const thumb = document.getElementById(`thumb-${index}`);
+            const poster = document.getElementById(`poster-${index}`);
+            const overlay = document.getElementById(`overlay-${index}`);
+            if (this.state.isScaleFill) {
+              // cover 模式：显示封面缩略图，隐藏模糊背景
+              if (thumb) thumb.style.opacity = "1";
+              if (poster) poster.style.opacity = "0";
+              if (overlay) overlay.style.opacity = "0";
+            } else {
+              // contain 模式：隐藏封面缩略图，显示模糊背景
+              if (thumb) thumb.style.opacity = "0";
+              if (poster) poster.style.opacity = "0.7";
+              if (overlay) overlay.style.opacity = "1";
+            }
+          });
+
+          const scaleBtn = this.dom.scaleBtn;
+          if (scaleBtn) scaleBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isScaleFill ? "maximize-2" : "minimize-2"}" class="stroke-white w-6 h-6 drop-shadow-md"></i></div>`;
+          lucide.createIcons();
+        }
+
+        async showMediaInfo() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          this.dom.mediaInfoModal.classList.remove("hidden");
+          // 打开详情面板也是交互，且属于遮罩状态，需重置/停止计时
+          this.showInterfaceTemp();
+          this.dom.mediaInfoContent.innerHTML = `<div class="flex justify-center py-4"><i data-lucide="loader-2" class="w-6 h-6 animate-spin text-gray-500"></i></div>`;
+          lucide.createIcons();
+
+          try {
+            const res = await fetch(
+              `${this.config.server}/emby/Users/${this.config.userId}/Items/${item.Id}?api_key=${this.config.token}&Fields=MediaSources`,
+            );
+            if (!res.ok) throw new Error("API Error");
+            const data = await res.json();
+
+            if (data && data.MediaSources && data.MediaSources.length > 0) {
+              const src = data.MediaSources[0];
+              const c = src.Container || "未知";
+              const vStream = src.MediaStreams?.find((s) => s.Type === "Video");
+              const w = vStream?.Width || "?";
+              const h = vStream?.Height || "?";
+              const fps = vStream?.AverageFrameRate
+                ? Math.round(parseFloat(vStream.AverageFrameRate))
+                : "?";
+              const vCodec = vStream?.Codec || "未知";
+              const aCodec =
+                src.MediaStreams?.find((s) => s.Type === "Audio")?.Codec ||
+                "未知";
+              const bitrate = src.Bitrate
+                ? (src.Bitrate / 1000000).toFixed(2) + " Mbps"
+                : "未知";
+              const fileSizeStr = src.Size
+                ? src.Size > 1024 * 1024 * 1024
+                  ? (src.Size / (1024 * 1024 * 1024)).toFixed(1) + " GB"
+                  : (src.Size / (1024 * 1024)).toFixed(1) + " MB"
+                : "未知";
+              // 布局说明：py-2 控制行高（间距），items-center 确保文字垂直居中
+              this.dom.mediaInfoContent.innerHTML = `
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">分辨率</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${w}x${h}@${fps}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">封装格式</span>
+                                <span class="col-span-2 text-gray-200">${c.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">视频编码</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${vCodec.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">音频编码</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${aCodec.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">总码率</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${bitrate}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">文件体积</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${fileSizeStr}</span>
+                            </div>
+                        `;
+            } else {
+              this.dom.mediaInfoContent.innerHTML = `<div class="text-center text-red-400 py-4">无法获取媒体信息</div>`;
+            }
+          } catch (e) {
+            this.dom.mediaInfoContent.innerHTML = `<div class="text-center text-red-400 py-4">获取数据失败</div>`;
+          }
+        }
+
+        async openTagDrawer() {
+          const current = this.state.videos[this.state.currentIndex];
+          if (!current) return this.showToast("当前没有可打标签的视频");
+          try {
+            const res = await fetch(`/api/tags?itemId=${encodeURIComponent(current.Id)}`);
+            if (!res.ok) throw new Error("load tags failed");
+            const data = await res.json();
+            this.state.tags = Array.isArray(data.tags) ? data.tags : [];
+            this.state.selectedTags = new Set(data.selected || []);
+            this.renderTags();
+            document.getElementById("newTagForm").classList.add("hidden");
+            document.getElementById("tagDrawer").classList.add("active");
+            this.showInterfaceTemp();
+          } catch (error) {
+            console.error("加载标签失败:", error);
+            this.showToast("加载标签失败，请重试");
+          }
+        }
+
+        async updateTagButton(video) {
+          const button = this.dom.tagBtn;
+          if (!button || !video) return;
+          const videoId = video.Id;
+          try {
+            const res = await fetch(`/api/tags?itemId=${encodeURIComponent(videoId)}`);
+            if (!res.ok) throw new Error("load tags failed");
+            const data = await res.json();
+            // 快速切换视频时，忽略已经过期的请求结果。
+            if (this.state.videos[this.state.currentIndex]?.Id !== videoId) return;
+            const hasTags = Array.isArray(data.selected) && data.selected.length > 0;
+            button.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="tags" class="${hasTags ? "stroke-primary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons({ root: button });
+          } catch (error) {
+            console.warn("加载当前视频标签状态失败:", error);
+          }
+        }
+
+        renderTags() {
+          const list = document.getElementById("tagList");
+          const empty = document.getElementById("emptyTagsHint");
+          list.innerHTML = this.state.tags.map((tag) => {
+            const selected = this.state.selectedTags.has(tag);
+            return `<button type="button" data-tag="${this.escapeHtml(tag)}" class="tag-choice focusable-item px-3 py-2 rounded border text-sm transition-all active:scale-95 ${selected ? "border-primary bg-primary/20 text-primary" : "border-gray-600 bg-gray-800/40 text-gray-200"}">${this.escapeHtml(tag)}<i data-lucide="check" class="w-3.5 h-3.5 inline-block align-text-bottom ml-1 ${selected ? "" : "hidden"}"></i></button>`;
+          }).join("");
+          empty.classList.toggle("hidden", this.state.tags.length > 0);
+          list.querySelectorAll(".tag-choice").forEach((button) => {
+            button.onclick = () => {
+              const tag = button.dataset.tag;
+              if (this.state.selectedTags.has(tag)) this.state.selectedTags.delete(tag);
+              else this.state.selectedTags.add(tag);
+              this.renderTags();
+            };
+          });
+          lucide.createIcons({ root: list });
+        }
+
+        escapeHtml(value) {
+          const node = document.createElement("span");
+          node.textContent = value;
+          return node.innerHTML;
+        }
+
+        // --- 事件绑定 ---
+        bindEvents() {
+          this.dom.clickToPlayOverlay.onclick = () => {
+            this.dom.clickToPlayOverlay.style.display = "none";
+            this.playVideo(this.state.currentIndex);
+          };
+
+          this.dom.favoriteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleFavorite();
+            const favBtn = document.getElementById("favoriteBtn");
+            const isFav = this.state.favorites.has(
+              String(this.state.videos[this.state.currentIndex]?.Id),
+            );
+            favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="${isFav ? "text-secondary fill-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+            this.showInterfaceTemp();
+          };
+
+          this.dom.tagBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.openTagDrawer();
+          };
+
+          this.dom.videoInfoArea.onclick = (e) => {
+            e.stopPropagation();
+            const app = document.getElementById("app");
+            // 清屏状态或格子视图均不触发流媒体详情
+            if (
+              app.classList.contains("interface-hidden") ||
+              app.classList.contains("grid-active")
+            )
+              return;
+            this.showMediaInfo();
+          };
+
+          this.dom.closeMediaInfoBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.dom.mediaInfoModal.classList.add("hidden");
+            this.showInterfaceTemp();
+          };
+
+          this.dom.mediaInfoModal.onclick = (e) => {
+            if (e.target === e.currentTarget) {
+              this.dom.mediaInfoModal.classList.add("hidden");
+              this.showInterfaceTemp();
+            }
+          };
+
+          this.dom.rightToolbar.addEventListener("click", (e) => {
+            const app = document.getElementById("app");
+            if (app.classList.contains("interface-hidden")) {
+              app.classList.remove("interface-hidden");
+              this.showInterfaceTemp();
+            }
+          });
+
+          this.dom.muteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.state.isMuted = !this.state.isMuted;
+            localStorage.setItem("shufflebox_is_muted", this.state.isMuted);
+
+            const v = this.getVideoElement();
+            if (v) {
+              v.muted = this.state.isMuted;
+            }
+
+            const muteBtn = this.dom.muteBtn;
+            muteBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isMuted ? "volume-x" : "volume-2"}" class="${this.state.isMuted ? "text-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+          };
+
+          this.dom.fullscreenBtn.onclick = (e) => {
+            e.stopPropagation();
+            const app = document.getElementById("app");
+
+            const isIOS =
+              /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+              (navigator.platform === "MacIntel" &&
+                navigator.maxTouchPoints > 1);
+            const isStandalone =
+              window.navigator.standalone === true ||
+              window.matchMedia("(display-mode: standalone)").matches;
+
+            // 方案一：向 iOS 妥协，采用“沉浸式融合”伪全屏
+            // 若在 iOS 且已加主屏幕（PWA），通过手动移除 UI 来模拟系统全屏
+            if (isIOS && isStandalone) {
+              if (!app.classList.contains("ios-pwa-fullscreen")) {
+                app.classList.add("ios-pwa-fullscreen");
+                this.showInterfaceTemp();
+                const fullscreenBtn = this.dom.fullscreenBtn;
+                fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="minimize" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+                lucide.createIcons();
+              } else {
+                if (app.classList.contains("interface-hidden")) {
+                  app.classList.remove("interface-hidden");
+                  this.showInterfaceTemp();
+                } else {
+                  app.classList.remove("ios-pwa-fullscreen");
+                  app.classList.remove("interface-hidden");
+                  if (this.csTimer) clearTimeout(this.csTimer);
+                  const fullscreenBtn = this.dom.fullscreenBtn;
+                  fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="maximize" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+                  lucide.createIcons();
+                }
+              }
+              return;
+            }
+
+            // 正常的 安卓/PC 系统调用原生全屏
+            if (!document.fullscreenElement) {
+              document.documentElement
+                .requestFullscreen()
+                .then(() => {
+                  this.showInterfaceTemp();
+                })
+                .catch(() => {});
+            } else {
+              if (app.classList.contains("interface-hidden")) {
+                app.classList.remove("interface-hidden");
+                this.showInterfaceTemp();
+              } else {
+                document.exitFullscreen();
+                app.classList.remove("interface-hidden");
+              }
+            }
+          };
+          document.addEventListener("fullscreenchange", () => {
+            const isFull = !!document.fullscreenElement;
+            const fullscreenBtn = this.dom.fullscreenBtn;
+            fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="${isFull ? "minimize" : "maximize"}" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+
+            if (!isFull) {
+              const app = document.getElementById("app");
+              app.classList.remove("interface-hidden");
+              if (this.csTimer) clearTimeout(this.csTimer);
+            }
+          });
+
+          this.dom.deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleDeleteMode();
+          };
+
+          this.dom.viewModeBtn = document.getElementById("viewModeBtn");
+          this.dom.viewModeBtn.onclick = () => this.toggleViewMode();
+          this.dom.playModeBtn.onclick = (event) => { event.stopPropagation(); this.togglePlayMode(); };
+          this.dom.playModeBtn.onpointerdown = (event) => event.stopPropagation();
+          this.dom.libraryBtn.onclick = () => this.showLibraries();
+          this.dom.myBtn.onclick = () => this.toggleModal("profilePage", true);
+
+          // Material Design 3 液体波纹点击反馈
+          document.querySelectorAll(".nav-btn").forEach((btn) => {
+            btn.addEventListener("click", function () {
+              if (this.navTimer) clearTimeout(this.navTimer);
+              this.classList.remove("nav-clicked");
+              // 强制重绘，重启CSS动画
+              void this.offsetWidth;
+              this.classList.add("nav-clicked");
+
+              this.navTimer = setTimeout(() => {
+                this.classList.remove("nav-clicked");
+              }, 1000); // 1秒后过渡消失
+            });
+          });
+
+          document.getElementById("closeLibraryBtn").onclick = () =>
+            this.toggleModal("libraryModal", false);
+          document.getElementById("applyLibrariesBtn").onclick = async () => {
+            if (!this.state.currentLibraryId) return this.showToast("请至少选择一个媒体源");
+            this.toggleLoading(true);
+            try {
+              await this.saveMediaPreferences();
+              this.state.currentTab = "home";
+              this.updateTabHighlight();
+              this.fetchVideos(
+                this.state.currentLibraryId,
+                null,
+                false,
+                this.state.playMode === "random",
+              );
+              this.toggleModal("libraryModal", false);
+            } catch (error) {
+              console.error("保存媒体源设置失败:", error);
+              this.showToast("媒体源设置保存失败，请重试");
+            } finally {
+              this.toggleLoading(false);
+            }
+          };
+
+          document.getElementById("closeProfileBtn").onclick = () =>
+            this.toggleModal("profilePage", false);
+          document.getElementById("closeTagDrawerBtn").onclick = () => {
+            document.getElementById("tagDrawer").classList.remove("active");
+            this.showInterfaceTemp();
+          };
+          document.getElementById("newTagBtn").onclick = () => {
+            document.getElementById("newTagForm").classList.remove("hidden");
+            document.getElementById("newTagInput").focus();
+          };
+          document.getElementById("cancelNewTagBtn").onclick = () => {
+            document.getElementById("newTagForm").classList.add("hidden");
+            document.getElementById("newTagInput").value = "";
+          };
+          document.getElementById("saveNewTagBtn").onclick = async () => {
+            const input = document.getElementById("newTagInput");
+            const name = input.value.trim();
+            if (!name) return this.showToast("请输入标签名称");
+            try {
+              const res = await fetch("/api/tags", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || "create tag failed");
+              this.state.tags = data.tags;
+              this.state.selectedTags.add(data.name);
+              input.value = "";
+              document.getElementById("newTagForm").classList.add("hidden");
+              this.renderTags();
+              this.showToast(`已创建标签「${data.name}」`);
+            } catch (error) {
+              this.showToast(error.message || "新建标签失败");
+            }
+          };
+          document.getElementById("saveVideoTagsBtn").onclick = async () => {
+            const current = this.state.videos[this.state.currentIndex];
+            if (!current) return;
+            try {
+              const res = await fetch("/api/tags/video", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ itemId: current.Id, tags: [...this.state.selectedTags] }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || "save video tags failed");
+              this.state.selectedTags = new Set(data.selected || []);
+              this.updateTagButton(current);
+              document.getElementById("tagDrawer").classList.remove("active");
+              this.showToast("视频标签已保存");
+              this.showInterfaceTemp();
+            } catch (error) {
+              this.showToast(error.message || "保存标签失败");
+            }
+          };
+          document.getElementById("saveConfigBtn").onclick = () =>
+            this.saveConfig();
+          document.getElementById("resetConfigBtn").onclick = () =>
+            this.resetConfig();
+
+          this.dom.confirmDeleteBtn.onclick = () => this.executeDelete();
+          this.dom.cancelDeleteBtn.onclick = () =>
+            this.toggleModal("deleteConfirmModal", false);
+
+          this.dom.deleteConfirmModal.onclick = (e) => {
+            if (e.target === e.currentTarget) {
+              this.toggleModal("deleteConfirmModal", false);
+            }
+          };
+
+          document.getElementById("progressBarContainer").onclick = (e) => {
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            const v = this.getVideoElement();
+            if (v && v.duration)
+              v.currentTime =
+                ((e.clientX - rect.left) / rect.width) * v.duration;
+          };
+
+          // 统一的复杂手势拦截挂载 (长按, 拖拽, 双击)
+          const container = document.getElementById("app");
+          this.bindGestures(container);
+
+          // 键盘与遥控器适配
+          this.bindKeyboard();
+        }
+
+        bindKeyboard() {
+          let okClickCount = 0;
+          let okClickTimer = null;
+
+          document.addEventListener("keydown", (e) => {
+            const profileActive = document
+              .getElementById("profilePage")
+              .classList.contains("active");
+          const libraryActive = document
+            .getElementById("libraryModal")
+            .classList.contains("active");
+            const tagActive = document
+              .getElementById("tagDrawer")
+              .classList.contains("active");
+
+            // 如果正在输入（且不是在处理遥控器方向键时），不触发全局快捷键
+            // 但我们要允许在输入框内通过上下键跳转焦点
+            const isInput = ["input", "textarea"].includes(
+              document.activeElement.tagName.toLowerCase(),
+            );
+
+            const key = e.key;
+            const keyCode = e.keyCode;
+            const lowKey = key.toLowerCase(); // 提前声明，全局可用
+
+            // --- 个人中心 / 弹窗 / 网格列表内的空间导航 (Remote Control / Keyboard Focus) ---
+            if (
+              profileActive ||
+              libraryActive ||
+              tagActive ||
+              document.getElementById("app").classList.contains("grid-active")
+            ) {
+              const items = Array.from(
+                document.querySelectorAll(
+                  profileActive
+                    ? "#profilePage .focusable-item"
+                    : libraryActive
+                      ? "#libraryModal .focusable-item"
+                      : tagActive
+                        ? "#tagDrawer .focusable-item"
+                        : "#videoContainer .focusable-item",
+                ),
+              );
+              let currentIndex = items.indexOf(document.activeElement);
+              if (
+                !isInput &&
+                (key === "ArrowUp" ||
+                  key === "ArrowDown" ||
+                  key === "ArrowLeft" ||
+                  key === "ArrowRight" ||
+                  lowKey === "w" ||
+                  lowKey === "a" ||
+                  lowKey === "s" ||
+                  lowKey === "d" ||
+                  [38, 40, 37, 39].includes(keyCode))
+              ) {
+                e.preventDefault();
+                if (currentIndex === -1) {
+                  let startItem = items[0];
+                  if (
+                    document
+                      .getElementById("app")
+                      .classList.contains("grid-active")
+                  ) {
+                    startItem =
+                      items.find(
+                        (it) => it.dataset.index == this.state.currentIndex,
+                      ) || items[0];
+                  }
+                  startItem?.focus();
+                } else {
+                  const isVideoGrid =
+                    document
+                      .getElementById("app")
+                      .classList.contains("grid-active") &&
+                    !profileActive &&
+                    !libraryActive;
+                  if (isVideoGrid) {
+                    // 视频网格：3 列规则偏移
+                    let nextIdx = currentIndex;
+                    if (key === "ArrowDown" || lowKey === "s" || keyCode === 40)
+                      nextIdx += 3;
+                    else if (
+                      key === "ArrowUp" ||
+                      lowKey === "w" ||
+                      keyCode === 38
+                    )
+                      nextIdx -= 3;
+                    else if (
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      keyCode === 39
+                    )
+                      nextIdx += 1;
+                    else if (
+                      key === "ArrowLeft" ||
+                      lowKey === "a" ||
+                      keyCode === 37
+                    )
+                      nextIdx -= 1;
+
+                    if (nextIdx >= 0 && nextIdx < items.length) {
+                      items[nextIdx].focus();
+                      items[nextIdx].scrollIntoView({
+                        behavior: "smooth",
+                        block: "center",
+                      });
+                    }
+                  } else if (libraryActive) {
+                    // 媒体库弹窗：基于屏幕坐标的空间导航
+                    // 正确处理带分区标题的不连续网格，无论多少列都精准匹配视觉方向
+                    const cur = items[currentIndex];
+                    const curR = cur.getBoundingClientRect();
+                    const curCx = curR.left + curR.width / 2;
+                    const curCy = curR.top + curR.height / 2;
+
+                    let dir;
+                    if (key === "ArrowDown" || lowKey === "s" || keyCode === 40)
+                      dir = "down";
+                    else if (
+                      key === "ArrowUp" ||
+                      lowKey === "w" ||
+                      keyCode === 38
+                    )
+                      dir = "up";
+                    else if (
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      keyCode === 39
+                    )
+                      dir = "right";
+                    else if (
+                      key === "ArrowLeft" ||
+                      lowKey === "a" ||
+                      keyCode === 37
+                    )
+                      dir = "left";
+
+                    let best = null,
+                      bestScore = Infinity;
+                    items.forEach((item) => {
+                      if (item === cur) return;
+                      const r = item.getBoundingClientRect();
+                      const cx = r.left + r.width / 2;
+                      const cy = r.top + r.height / 2;
+                      const dx = cx - curCx,
+                        dy = cy - curCy;
+                      // 仅保留目标方向的元素（留 2px 容差）
+                      if (dir === "down" && dy <= 2) return;
+                      if (dir === "up" && dy >= -2) return;
+                      if (dir === "right" && dx <= 2) return;
+                      if (dir === "left" && dx >= -2) return;
+                      // 评分：主轴距离优先，副轴偏移加权惩罚
+                      const score =
+                        dir === "down" || dir === "up"
+                          ? Math.abs(dy) + Math.abs(dx) * 3
+                          : Math.abs(dx) + Math.abs(dy) * 3;
+                      if (score < bestScore) {
+                        bestScore = score;
+                        best = item;
+                      }
+                    });
+
+                    if (best) {
+                      best.focus();
+                      best.scrollIntoView({
+                        behavior: "smooth",
+                        block: "nearest",
+                      });
+                    }
+                  } else {
+                    // 个人中心：线性跳转
+                    if (
+                      key === "ArrowDown" ||
+                      lowKey === "s" ||
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      [40, 39].includes(keyCode)
+                    ) {
+                      currentIndex = (currentIndex + 1) % items.length;
+                    } else {
+                      currentIndex =
+                        (currentIndex - 1 + items.length) % items.length;
+                    }
+                    items[currentIndex].focus();
+                  }
+                }
+                return;
+              }
+
+              // OK / Enter 在焦点元素上触发点击
+              if (key === "Enter" || keyCode === 13) {
+                if (
+                  document.activeElement &&
+                  document.activeElement.classList.contains("focusable-item")
+                ) {
+                  // 如果是输入框，回车不拦截，允许系统处理（弹出键盘等）
+                  if (
+                    document.activeElement.tagName.toLowerCase() === "input" &&
+                    document.activeElement.type !== "checkbox"
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  document.activeElement.click();
+                  return;
+                }
+              }
+            }
+
+            if (isInput) return;
+
+            // 1. 上下方向键 / WS：切换视频 (Keyboard & Remote)
+            if (key === "ArrowUp" || lowKey === "w" || keyCode === 38) {
+              e.preventDefault();
+              this.prevVideo();
+            } else if (
+              key === "ArrowDown" ||
+              lowKey === "s" ||
+              keyCode === 40
+            ) {
+              e.preventDefault();
+              this.nextVideo();
+            }
+            // 2. 左右方向键 / AD：快进快退 15 秒 (Keyboard & Remote)
+            else if (key === "ArrowLeft" || lowKey === "a" || keyCode === 37) {
+              e.preventDefault();
+              const v = this.getVideoElement();
+              if (v) v.currentTime = Math.max(0, v.currentTime - 15);
+              this.showInterfaceTemp();
+            } else if (
+              key === "ArrowRight" ||
+              lowKey === "d" ||
+              keyCode === 39
+            ) {
+              e.preventDefault();
+              const v = this.getVideoElement();
+              if (v && v.duration)
+                v.currentTime = Math.min(v.duration, v.currentTime + 15);
+              this.showInterfaceTemp();
+            }
+            // 3. 确认逻辑：空格键 (Keyboard) & OK键 (Remote)
+            else if (key === " " || key === "Enter" || keyCode === 13) {
+              e.preventDefault();
+              if (key === " ") {
+                // 键盘空格：暂停/播放
+                this.togglePlay();
+              } else {
+                // 遥控器 OK 键: 单击暂停/播放，双击收藏
+                okClickCount++;
+                if (okClickCount === 1) {
+                  okClickTimer = setTimeout(() => {
+                    this.togglePlay();
+                    okClickCount = 0;
+                  }, 300);
+                } else if (okClickCount === 2) {
+                  clearTimeout(okClickTimer);
+                  okClickCount = 0;
+                  // 在屏幕中心弹出收藏动画与逻辑
+                  this.handleDoubleTap(
+                    window.innerWidth / 2,
+                    window.innerHeight / 2,
+                  );
+                }
+              }
+            }
+            // 4. 菜单键/缩放键 (j / Menu)
+            else if (
+              key.toLowerCase() === "j" ||
+              keyCode === 18 ||
+              keyCode === 93 ||
+              keyCode === 118
+            ) {
+              if (
+                key.toLowerCase() === "j" ||
+                [18, 93, 118].includes(keyCode)
+              ) {
+                e.preventDefault();
+                this.toggleScaleMode();
+                this.showInterfaceTemp();
+              }
+            }
+            // 5. 新增快捷键适配 (R, E, F, G, V, I, U, M)
+            else {
+              if (lowKey === "r") {
+                this.dom.playModeBtn.click(); // 触发视觉反馈
+              } else if (lowKey === "f") {
+                this.dom.fullscreenBtn.click();
+              } else if (lowKey === "e") {
+                this.dom.viewModeBtn.click(); // 触发视觉反馈
+              } else if (lowKey === "g") {
+                const modal = document.getElementById("libraryModal");
+                if (modal && modal.classList.contains("active")) {
+                  this.toggleModal("libraryModal", false);
+                } else {
+                  this.showLibraries();
+                  this.dom.libraryBtn.classList.remove("nav-clicked");
+                  void this.dom.libraryBtn.offsetWidth;
+                  this.dom.libraryBtn.classList.add("nav-clicked");
+                  setTimeout(
+                    () => this.dom.libraryBtn.classList.remove("nav-clicked"),
+                    1000,
+                  );
+                }
+              } else if (lowKey === "i") {
+                const modal = document.getElementById("profilePage");
+                if (modal && modal.classList.contains("active")) {
+                  this.toggleModal("profilePage", false);
+                } else {
+                  this.toggleModal("profilePage", true);
+                  this.dom.myBtn.classList.remove("nav-clicked");
+                  void this.dom.myBtn.offsetWidth;
+                  this.dom.myBtn.classList.add("nav-clicked");
+                  setTimeout(
+                    () => this.dom.myBtn.classList.remove("nav-clicked"),
+                    1000,
+                  );
+                }
+              } else if (lowKey === "v") {
+                // 格子视图模式下屏蔽流媒体详情快捷键
+                const isGridActive = document
+                  .getElementById("app")
+                  .classList.contains("grid-active");
+                if (!isGridActive) {
+                  if (!this.dom.mediaInfoModal.classList.contains("hidden")) {
+                    this.toggleModal("mediaInfoModal", false);
+                  } else {
+                    this.showMediaInfo();
+                  }
+                }
+              } else if (lowKey === "u") {
+                this.handleDoubleTap(
+                  window.innerWidth / 2,
+                  window.innerHeight / 2,
+                );
+              } else if (lowKey === "m") {
+                this.dom.muteBtn.click();
+              }
+            }
+          });
+        }
+
+        bindGestures(container) {
+          let state = "IDLE"; // IDLE, SPEED, DRAG
+          let x0 = 0,
+            y0 = 0;
+          let t0 = 0;
+          let longPressTimer = null;
+          let clickTimer = null;
+          let clickCount = 0;
+          let targetTime = 0;
+          let originalTime = 0;
+          let gestureActive = false; // 防止右侧工具栏误触活动手势状态机
+
+          // Keep native vertical scrolling/snap as the single feed navigation path.
+          container.style.touchAction = "pan-y";
+          container.style.userSelect = "none";
+          container.style.webkitUserSelect = "none";
+
+          const speedToast = document.createElement("div");
+          speedToast.className =
+            "absolute top-[calc(env(safe-area-inset-top)+20px)] left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white px-4 py-2 rounded-full text-sm font-bold opacity-0 transition-opacity z-50 pointer-events-none flex items-center gap-2";
+          speedToast.innerHTML =
+            '<i data-lucide="fast-forward" class="w-4 h-4 text-green-400"></i><span>2 倍速播放中</span>';
+          document.getElementById("app").appendChild(speedToast);
+          lucide.createIcons();
+
+          const startHandler = (e) => {
+            if (this.state.viewMode !== "stream") {
+              gestureActive = false;
+              return;
+            }
+            // 黑名单：点击这些 UI 元素时不触发手势（播放/暂停/滑动）
+            const excluded = [
+              ".bottom-nav", // 底部导航栏
+              ".bottom-info", // 底部进度条+标题区域
+              ".right-toolbar", // 右侧收藏/缩放/静音
+              "#fullscreenBtn", // 右上角全屏按钮
+              "#deleteBtn", // 左上角删除按钮
+              "#libraryModal", // 媒体源选择弹窗
+              "#mediaInfoModal", // 流媒体信息弹窗
+              "#deleteConfirmModal", // 删除确认弹窗
+              ".profile-layer", // 个人中心全屏面板
+              "#tagDrawer", // 视频标签抽屉
+            ];
+            if (excluded.some((sel) => e.target.closest(sel))) {
+              gestureActive = false;
+              return;
+            }
+
+            gestureActive = true;
+            state = "IDLE";
+            // 注释：用户触摸屏幕开始手势时不再重置计时器，
+            // 只有在 endHandler 中确认为有效交互（点击/进度拖拽）才重置。
+            // 这样可以避免“上下滑动切换视频”也会不间断刷新清屏计时。
+            const t = e.touches ? e.touches[0] : e;
+            x0 = t.clientX;
+            y0 = t.clientY;
+            t0 = Date.now();
+
+            const v = this.getVideoElement();
+            if (v) originalTime = v.currentTime;
+
+            clearTimeout(longPressTimer);
+            longPressTimer = setTimeout(() => {
+              if (state === "IDLE") {
+                state = "SPEED";
+                if (v) v.playbackRate = 2.0;
+                speedToast.classList.remove("opacity-0");
+              }
+            }, 300);
+          };
+
+          const moveHandler = (e) => {
+            if (!gestureActive || this.state.viewMode !== "stream") return;
+            const t = e.touches ? e.touches[0] : e;
+            const diffX = t.clientX - x0;
+            const diffY = t.clientY - y0;
+
+            // 如果横向滑动大于纵向滑动，拦截系统返回手势
+            if (Math.abs(diffX) > Math.abs(diffY)) {
+              if (e.cancelable) e.preventDefault();
+            }
+
+            if (Math.abs(diffX) > 15 || Math.abs(diffY) > 15) {
+              clearTimeout(longPressTimer);
+
+              if (state === "SPEED") {
+                speedToast.classList.add("opacity-0");
+                const v = this.getVideoElement();
+                if (v) v.playbackRate = 1.0;
+              }
+
+              if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 15) {
+                state = "DRAG";
+              }
+            }
+
+            if (state === "DRAG") {
+              if (e.cancelable) e.preventDefault();
+              const v = this.getVideoElement();
+              if (v && v.duration) {
+                const ratio = diffX / (window.innerWidth / 2);
+                targetTime = originalTime + ratio * v.duration;
+                targetTime = Math.max(0, Math.min(targetTime, v.duration));
+
+                // 仅更新UI预览，不修改 currentTime 防止卡顿
+                const progressEl = document.getElementById("progressLine");
+                if (progressEl)
+                  progressEl.style.width = `${(targetTime / v.duration) * 100}%`;
+              }
+            }
+          };
+
+          const endHandler = (e) => {
+            if (!gestureActive || this.state.viewMode !== "stream") return;
+            gestureActive = false;
+            clearTimeout(longPressTimer);
+
+            const v = this.getVideoElement();
+
+            if (state === "SPEED") {
+              if (v) v.playbackRate = 1.0;
+              speedToast.classList.add("opacity-0");
+              state = "IDLE";
+              // 结束倍速播放属于有效交互，重置/开始清屏计时
+              this.showInterfaceTemp();
+              return;
+            }
+
+            if (state === "DRAG") {
+              if (v) v.currentTime = targetTime;
+              state = "IDLE";
+              // 结束进度拖拽属于有效交互，重置/开始清屏计时
+              this.showInterfaceTemp();
+              return;
+            }
+
+            state = "IDLE";
+            const t = e.changedTouches ? e.changedTouches[0] : e;
+            const diffX = t.clientX - x0;
+            const diffY = t.clientY - y0;
+            const time = Date.now() - t0;
+
+            if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10 && time < 300) {
+              clickCount++;
+              if (clickCount === 1) {
+                clickTimer = setTimeout(() => {
+                  const app = document.getElementById("app");
+                  if (app.classList.contains("interface-hidden")) {
+                    app.classList.remove("interface-hidden");
+                    this.showInterfaceTemp();
+                  } else {
+                    this.togglePlay();
+                  }
+                  clickCount = 0;
+                }, 250);
+              } else if (clickCount === 2) {
+                clearTimeout(clickTimer);
+                clickCount = 0;
+                const w = window.innerWidth;
+                if (t.clientX < w / 4) {
+                  this.handleDoubleTapSkip("rewind", t.clientX, t.clientY);
+                } else if (t.clientX > (w * 3) / 4) {
+                  this.handleDoubleTapSkip("forward", t.clientX, t.clientY);
+                } else {
+                  this.handleDoubleTap(t.clientX, t.clientY);
+                }
+              }
+            }
+          };
+
+          // 屏蔽选中和长按菜单
+          container.style.userSelect = "none";
+          container.style.webkitUserSelect = "none";
+
+          // 将事件绑定转移到触控遮罩层 (.touch-layer) 或容器，并通过事件拦截进一步确保右键菜单不弹出
+          container.addEventListener("contextmenu", (e) => {
+            // 如果是在视频区域触发的长按，禁止默认菜单
+            if (
+              e.target.closest(".touch-layer") ||
+              e.target.tagName.toLowerCase() === "video"
+            ) {
+              e.preventDefault();
+            }
+          });
+
+          // 直接绑定到 container，让 startHandler 内部的排除逻辑自行处理
+          container.addEventListener("touchstart", startHandler, {
+            passive: true,
+          });
+          container.addEventListener("touchmove", moveHandler, {
+            passive: false,
+          });
+
+          // 记录最后一次 touchend 的时间，用于过滤手机浏览器合成的鼠标事件
+          let lastTouchEnd = 0;
+          container.addEventListener("touchend", (e) => {
+            lastTouchEnd = Date.now();
+            endHandler(e);
+          });
+          container.addEventListener("touchcancel", () => {
+            gestureActive = false;
+            state = "IDLE";
+            clearTimeout(longPressTimer);
+            speedToast.classList.add("opacity-0");
+          });
+
+          // 鼠标适配层 (PC 端)。如果距上次 touchend < 500ms，则是手机浏览器合成事件，直接忽略
+          let isMouseDown = false;
+          container.addEventListener("mousedown", (e) => {
+            if (e.button !== 0) return;
+            if (Date.now() - lastTouchEnd < 500) return; // 屏蔽手机合成鼠标事件
+            isMouseDown = true;
+            e.touches = [{ clientX: e.clientX, clientY: e.clientY }];
+            startHandler(e);
+          });
+          container.addEventListener("mousemove", (e) => {
+            if (!isMouseDown) return;
+            e.touches = [{ clientX: e.clientX, clientY: e.clientY }];
+            moveHandler(e);
+          });
+          const mouseEndHandler = (e) => {
+            if (!isMouseDown) return;
+            isMouseDown = false;
+            e.changedTouches = [{ clientX: e.clientX, clientY: e.clientY }];
+            endHandler(e);
+          };
+          container.addEventListener("mouseup", mouseEndHandler);
+          container.addEventListener("mouseleave", mouseEndHandler);
+        }
+
+        async handleDoubleTapSkip(direction, x, y) {
+          const v = this.getVideoElement();
+          if (!v || !v.duration) return;
+
+          const isRewind = direction === "rewind";
+          if (isRewind) {
+            v.currentTime = Math.max(0, v.currentTime - 15);
+          } else {
+            v.currentTime = Math.min(v.duration, v.currentTime + 15);
+          }
+          this.showInterfaceTemp();
+
+          const bubble = document.createElement("div");
+          bubble.innerHTML = `
+                    <div class="flex flex-col items-center justify-center bg-black/40 backdrop-blur-md text-white rounded-full w-[80px] h-[80px] shadow-2xl space-y-1">
+                        <div class="flex items-center justify-center">
+                            ${isRewind ? '<i data-lucide="chevrons-left" class="w-6 h-6"></i>' : '<i data-lucide="chevrons-right" class="w-6 h-6"></i>'}
+                        </div>
+                        <span class="text-xs font-bold leading-none">15s</span>
+                    </div>
+                `;
+          bubble.className =
+            "absolute pointer-events-none z-50 transform pointer-events-none transition-all duration-300 ease-out flex items-center justify-center";
+          bubble.style.top = `${Math.max(80, Math.min(y - 40, window.innerHeight - 80))}px`;
+          if (isRewind) bubble.style.left = "20px";
+          else bubble.style.right = "20px";
+          bubble.style.opacity = "0";
+          bubble.style.transform = `scale(0.8) ${isRewind ? "translateX(-20px)" : "translateX(20px)"}`;
+
+          document.getElementById("app").appendChild(bubble);
+          lucide.createIcons({ root: bubble });
+
+          requestAnimationFrame(() => {
+            bubble.style.transform = "scale(1) translateX(0)";
+            bubble.style.opacity = "1";
+            setTimeout(() => {
+              bubble.style.transform = `scale(0.8) ${isRewind ? "translateX(-20px)" : "translateX(20px)"}`;
+              bubble.style.opacity = "0";
+              setTimeout(() => bubble.remove(), 300);
+            }, 400);
+          });
+        }
+
+        // 新增: 双击点赞动画与收藏逻辑
+        async handleDoubleTap(x, y) {
+          // 1. 点赞动画 DOM 生成
+          const heart = document.createElement("div");
+          heart.innerHTML =
+            '<i data-lucide="heart" class="fill-red-500 text-red-500 w-16 h-16 drop-shadow-xl"></i>';
+          heart.className =
+            "absolute pointer-events-none z-50 transform pointer-events-none transition-all duration-700 ease-out";
+
+          // 随机偏转角度
+          const rotation = Math.floor(Math.random() * 40) - 20;
+          heart.style.left = `${x - 32}px`;
+          heart.style.top = `${y - 32}px`;
+          heart.style.transform = `scale(0.5) rotate(${rotation}deg)`;
+          heart.style.opacity = "0";
+
+          document.getElementById("app").appendChild(heart);
+          lucide.createIcons({ root: heart });
+
+          // 动画序列
+          requestAnimationFrame(() => {
+            heart.style.transform = `scale(1.2) rotate(${rotation}deg)`;
+            heart.style.opacity = "1";
+
+            setTimeout(() => {
+              heart.style.transform = `scale(1) rotate(${rotation}deg) translateY(-100px)`;
+              heart.style.opacity = "0";
+              setTimeout(() => heart.remove(), 700);
+            }, 200);
+          });
+
+          // 2. 自动标记收藏（如未收藏则添加）
+          const currentVideo = this.state.videos[this.state.currentIndex];
+          if (currentVideo && !currentVideo.UserData?.IsFavorite) {
+            try {
+              const { server, token, userId } = this.config;
+              const res = await fetch(
+                `${server}/emby/Users/${userId}/FavoriteItems/${currentVideo.Id}?api_key=${token}`,
+                { method: "POST" },
+              );
+              if (res.ok) {
+                if (!currentVideo.UserData) currentVideo.UserData = {};
+                currentVideo.UserData.IsFavorite = true;
+                // 同步到本地 Set
+                this.state.favorites.add(String(currentVideo.Id));
+
+                // 高亮右侧收藏图标
+                const favBtn = document.getElementById("favoriteBtn");
+                if (favBtn) {
+                  favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="text-secondary fill-secondary w-6 h-6 drop-shadow-md"></i></div>`;
+                  lucide.createIcons({ root: favBtn });
+                }
+                this.showToast("❤️ 已收藏");
+              }
+            } catch (e) {
+              console.error("Double tap favorite failed:", e);
+            }
+          }
+        }
+
+        // --- 通用辅助 ---
+        toggleModal(id, show) {
+          const el = document.getElementById(id);
+          if (id === "profilePage" || id === "libraryModal") {
+            if (show) {
+              el.classList.add("active");
+              if (id === "profilePage") this.state.currentTab = "my";
+            } else {
+              el.classList.remove("active");
+            }
+            if (show && id === "profilePage") this.updateTabHighlight();
+          } else {
+            if (show) el.classList.remove("hidden");
+            else el.classList.add("hidden");
+          }
+
+          // 遥控器优化：打开时自动聚焦到已选中项，如没有已选中则聚焦到第一个
+          if (show) {
+            setTimeout(() => {
+              const allItems = Array.from(
+                el.querySelectorAll(".focusable-item"),
+              );
+              // 优先已选中项（带主题色背景），避免从第一项闪现的过渡
+              const selected = allItems.find((i) =>
+                i.classList.contains("bg-primary/20"),
+              );
+              const target = selected || allItems[0];
+              if (target) target.focus();
+            }, 300);
+          } else {
+            if (
+              document.activeElement &&
+              document.activeElement.closest(`#${id}`)
+            ) {
+              document.activeElement.blur();
+            }
+          }
+
+          // 核心逻辑：无论打开还是关闭弹窗，都调用 showInterfaceTemp
+          this.showInterfaceTemp();
+        }
+
+        toggleLoading(show) {
+          const el = this.dom.loading;
+          if (show) {
+            el.classList.remove("hidden");
+            // 加载中强制隐藏当前播放按钮，避免状态冲突导致的闪烁
+            const btn = this.getPlayButton();
+            if (btn) btn.classList.remove("paused");
+          } else {
+            el.classList.add("hidden");
+          }
+        }
+
+        showToast(msg, duration = 3000) {
+          // 清除上一个计时器，防止快速连发 Toast 时提前消失
+          // duration: 显示时长（ms），默认 3000。重要提示可传更大值，如 5000
+          if (this._toastTimer) clearTimeout(this._toastTimer);
+          const t = this.dom.toast;
+          t.textContent = msg;
+          t.classList.remove("opacity-0");
+          this._toastTimer = setTimeout(
+            () => t.classList.add("opacity-0"),
+            duration,
+          );
+        }
+
+        formatTime(s) {
+          if (!s) return "00:00";
+          const m = Math.floor(s / 60);
+          const sec = Math.floor(s % 60);
+          return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+        }
+      }
+
+      window.onload = () => {
+        lucide.createIcons();
+        window.app = new EmbyApp();
+
+        // 注册 Service Worker 以满足安卓 PWA 安装要求
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.register("./sw.js").catch(() => {});
+        }
+      };
+    </script>
+  </body>
+</html>
+<!--
+  End of ShuffleBox.
+  探索更多：谢週五の藏经阁 (https://5nav.eu.org)
+  Keep Coding, Keep Fun.
+-->

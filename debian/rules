@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	node --check server.js
+
+override_dh_auto_install:
+	install -d -m 0755 debian/shufflebox/opt/ShuffleBox
+	cp -a LICENSE README package.json server.js bin en zh debian/shufflebox/opt/ShuffleBox/
+	install -d -m 0755 debian/shufflebox/usr/bin
+	install -m 0755 bin/shufflebox debian/shufflebox/usr/bin/shufflebox
+	install -d -m 0755 debian/shufflebox/usr/share/shufflebox
+	install -m 0640 debian/shufflebox.env debian/shufflebox/usr/share/shufflebox/shufflebox.env.example
+	install -d -m 0755 debian/shufflebox/lib/systemd/system
+	install -m 0644 debian/shufflebox.service debian/shufflebox/lib/systemd/system/shufflebox.service
+	install -d -m 0755 debian/shufflebox/usr/share/doc/shufflebox
+	install -m 0644 debian/copyright debian/shufflebox/usr/share/doc/shufflebox/copyright

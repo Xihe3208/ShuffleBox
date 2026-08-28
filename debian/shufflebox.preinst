@@ -1,0 +1,127 @@
+#!/bin/sh
+set -eu
+
+BACKUP_ROOT=/var/backups/shufflebox
+BACKUP_DIR=""
+
+ensure_backup_dir() {
+    if [ -n "$BACKUP_DIR" ]; then
+        return
+    fi
+    install -d -m 0700 "$BACKUP_ROOT"
+    BACKUP_DIR="$BACKUP_ROOT/legacy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    install -d -m 0700 "$BACKUP_DIR"
+}
+
+backup_path() {
+    source_path=$1
+    backup_name=$2
+    [ -e "$source_path" ] || return 0
+    ensure_backup_dir
+    if [ -e "$BACKUP_DIR/$backup_name" ]; then
+        return 0
+    fi
+    cp -a "$source_path" "$BACKUP_DIR/$backup_name"
+}
+
+is_legacy_unit() {
+    unit_path=$1
+    [ -f "$unit_path" ] || return 1
+    grep -Fq 'Description=EmbyX SMB media player' "$unit_path" &&
+        grep -Fq 'ExecStart=/usr/bin/node /opt/embyx/server.js' "$unit_path"
+}
+
+stop_legacy_service() {
+    if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+        return
+    fi
+    if systemctl is-active --quiet embyx.service 2>/dev/null ||
+       is_legacy_unit /etc/systemd/system/embyx.service ||
+       is_legacy_unit /lib/systemd/system/embyx.service ||
+       is_legacy_unit /usr/lib/systemd/system/embyx.service; then
+        systemctl disable --now embyx.service >/dev/null 2>&1 || true
+    fi
+}
+
+remove_unowned_legacy_unit() {
+    unit_path=$1
+    if is_legacy_unit "$unit_path" &&
+       ! dpkg-query -S "$unit_path" >/dev/null 2>&1; then
+        backup_path "$unit_path" "legacy-$(basename "$unit_path")"
+        rm -f "$unit_path"
+    fi
+}
+
+migrate_directory_if_missing() {
+    legacy_path=$1
+    current_path=$2
+    mode=$3
+    [ -e "$legacy_path" ] || return 0
+    if [ -e "$current_path" ]; then
+        echo "ShuffleBox: keeping existing $current_path; legacy data was not overwritten." >&2
+        return 0
+    fi
+    cp -a "$legacy_path" "$current_path"
+    if [ -d "$current_path" ]; then
+        chmod "$mode" "$current_path" 2>/dev/null || true
+    fi
+}
+
+case "${1-install}" in
+    install|upgrade|abort-upgrade)
+        stop_legacy_service
+
+        # Back up every legacy item before copying or transforming it. The
+        # backup is root-only and is intentionally retained for rollback.
+        backup_path /etc/embyx legacy-etc-embyx
+        backup_path /var/lib/embyx legacy-data-embyx
+        for unit_path in /etc/systemd/system/embyx.service /lib/systemd/system/embyx.service /usr/lib/systemd/system/embyx.service; do
+            if is_legacy_unit "$unit_path"; then
+                backup_path "$unit_path" "legacy-$(basename "$unit_path")"
+            fi
+        done
+
+        # Runtime state is copied only when the new location does not exist;
+        # this prevents an upgrade from overwriting any new installation.
+        migrate_directory_if_missing /var/lib/embyx /var/lib/shufflebox 0700
+
+        # A non-mounted media directory can be migrated as local data. For an
+        # active mount, only create the new mountpoint; media is remounted from
+        # the configured SMB share by ShuffleBox.
+        if [ -e /mnt/embyx-media ] && [ ! -e /mnt/shufflebox-media ]; then
+            if command -v mountpoint >/dev/null 2>&1 && mountpoint -q /mnt/embyx-media; then
+                install -d -m 0755 /mnt/shufflebox-media
+            else
+                migrate_directory_if_missing /mnt/embyx-media /mnt/shufflebox-media 0755
+            fi
+        fi
+
+        # Remove only exact, administrator-unowned legacy units after they
+        # have been backed up. Package-owned files disappear with their old
+        # package when the administrator removes that package.
+        remove_unowned_legacy_unit /etc/systemd/system/embyx.service
+        remove_unowned_legacy_unit /lib/systemd/system/embyx.service
+        remove_unowned_legacy_unit /usr/lib/systemd/system/embyx.service
+
+        legacy_firstboot=/etc/systemd/system/embyx-firstboot.service
+        if [ -f "$legacy_firstboot" ] &&
+           grep -Fq 'Description=EmbyX SMB first-boot package installation' "$legacy_firstboot" &&
+           grep -Fq 'ExecStart=/bin/sh /usr/local/sbin/embyx-firstboot.sh' "$legacy_firstboot"; then
+            backup_path "$legacy_firstboot" legacy-embyx-firstboot.service
+            if ! dpkg-query -S "$legacy_firstboot" >/dev/null 2>&1; then
+                rm -f "$legacy_firstboot"
+            fi
+        fi
+        legacy_script=/usr/local/sbin/embyx-firstboot.sh
+        if [ -f "$legacy_script" ] &&
+           grep -Fq 'OFFLINE_DIR=/opt/embyx-offline' "$legacy_script" &&
+           grep -Fq 'dpkg --unpack' "$legacy_script"; then
+            backup_path "$legacy_script" legacy-embyx-firstboot.sh
+            if ! dpkg-query -S "$legacy_script" >/dev/null 2>&1; then
+                rm -f "$legacy_script"
+            fi
+        fi
+        ;;
+esac
+
+exit 0

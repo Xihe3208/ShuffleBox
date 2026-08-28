@@ -1,0 +1,4113 @@
+<!--
+  ShuffleBox - Short Video Player for Emby
+  Juneix (https://github.com/juneix)
+  © 2026 All Rights Reserved
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="theme-color" content="#000000" />
+    <meta name="referrer" content="no-referrer" />
+
+    <link rel="manifest" href="manifest.json" />
+
+    <link rel="icon" type="image/png" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+
+    <title>ShuffleBox</title>
+    <script src="https://cdn.tailwindcss.com" data-cfasync="false"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script data-cfasync="false">
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: "#52B54B",
+              secondary: "#EE3152",
+            },
+            fontFamily: {
+              sans: ["PingFang SC", "Helvetica Neue", "Arial", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+    <style type="text/tailwindcss">
+      @layer utilities {
+        .video-fullscreen {
+          @apply w-full h-full absolute inset-0 z-10;
+        }
+
+        .slide-container {
+          @apply relative w-screen overflow-hidden bg-black;
+          height: 100dvh;
+        }
+        @media (display-mode: standalone) {
+          .slide-container {
+            height: 100vh;
+          }
+        }
+
+        .slide-item {
+          @apply relative w-full h-full shrink-0 z-10 overflow-hidden;
+          scroll-snap-align: start;
+        }
+
+        .feed-scrollbar-hidden {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        .feed-scrollbar-hidden::-webkit-scrollbar {
+          display: none;
+        }
+
+        .play-pause-btn {
+          @apply absolute top-1/2 left-1/2 w-16 h-16 rounded-full flex items-center justify-center z-20 opacity-0 pointer-events-none transition-all duration-200 ease-out bg-black/30;
+          transform: translate(-50%, -50%) scale(1.5);
+        }
+        .play-pause-btn.paused {
+          @apply opacity-100;
+          transform: translate(-50%, -50%) scale(1.5);
+        }
+        .play-pause-btn i {
+          @apply text-2xl text-white;
+        }
+
+        .interface-hidden .bottom-info,
+        .interface-hidden .bottom-nav,
+        .interface-hidden .right-toolbar,
+        .interface-hidden #fullscreenBtn,
+        .interface-hidden #deleteBtn {
+          @apply opacity-0 pointer-events-none transition-opacity duration-300;
+        }
+
+        .grid-active .bottom-info,
+        .grid-active .right-toolbar,
+        .grid-active #fullscreenBtn,
+        .grid-active #deleteBtn {
+          @apply opacity-0 pointer-events-none transition-opacity duration-300;
+        }
+
+        .focusable-item:focus {
+          @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-black z-20;
+        }
+
+        .profile-layer {
+          @apply fixed top-0 left-0 w-full h-full z-[60] translate-y-full transition-transform duration-300 ease-in-out;
+        }
+        .profile-layer.active {
+          @apply translate-y-0;
+        }
+        .tag-drawer {
+          @apply fixed top-0 right-0 h-full w-full max-w-sm z-[70] translate-x-full transition-transform duration-300 ease-in-out bg-black/95 border-l border-gray-700/50 shadow-2xl;
+        }
+        .tag-drawer.active { @apply translate-x-0; }
+
+        .progress-line {
+          @apply h-full bg-white transition-[width] duration-[250ms] ease-linear;
+        }
+
+        .nav-btn {
+          @apply relative flex flex-col items-center justify-center w-1/4 h-full cursor-pointer transition-colors duration-300 z-10;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .nav-btn::before {
+          content: "";
+          @apply absolute top-1/2 left-1/2 w-[3.5rem] h-8 rounded-full bg-primary/30 opacity-0 pointer-events-none transition-all duration-500 ease-out z-[-1];
+          transform: translate(-50%, -50%) scale(0.5);
+          backdrop-filter: blur(8px);
+        }
+        .nav-btn.nav-clicked::before {
+          @apply opacity-100;
+          transform: translate(-50%, -50%) scale(1);
+        }
+        .nav-btn.nav-clicked {
+          color: theme("colors.primary") !important;
+        }
+        .nav-btn.nav-clicked svg {
+          filter: drop-shadow(0 0 6px rgba(82, 181, 75, 0.6));
+        }
+      }
+    </style>
+  </head>
+
+  <body
+    class="bg-black text-white overflow-hidden font-sans select-none overscroll-none"
+  >
+    <div id="app" class="slide-container">
+      <div id="videoContainer" class="relative w-full h-full"></div>
+
+      <div
+        id="clickToPlayOverlay"
+        class="absolute inset-0 z-50 flex items-center justify-center bg-black/40 cursor-pointer"
+        style="display: none"
+      >
+        <div class="text-center">
+          <div
+            class="w-20 h-20 bg-black/50 rounded-full flex items-center justify-center animate-pulse mx-auto"
+          >
+            <i data-lucide="play" class="text-white text-3xl"></i>
+          </div>
+          <p class="text-white text-lg mt-4 font-medium">Tap to Play</p>
+        </div>
+      </div>
+
+      <div
+        class="right-toolbar absolute right-4 bottom-40 flex flex-col items-center space-y-6 z-30 transition-opacity duration-300"
+      >
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="favoriteBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="heart"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="tagBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="tags"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+
+        <div
+          class="flex flex-col items-center cursor-pointer active:scale-90 transition-transform"
+          id="muteBtn"
+        >
+          <div class="w-12 h-12 flex items-center justify-center">
+            <i
+              data-lucide="volume-2"
+              class="stroke-white w-6 h-6 drop-shadow-md"
+            ></i>
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="absolute top-[calc(10px+env(safe-area-inset-top))] left-4 z-30 transition-opacity duration-300"
+        id="deleteBtn"
+      >
+        <div
+          class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"
+        >
+          <i
+            data-lucide="trash-2"
+            class="stroke-white w-5 h-5 drop-shadow-md"
+          ></i>
+        </div>
+      </div>
+
+      <div
+        class="absolute top-[calc(10px+env(safe-area-inset-top))] right-4 z-30 transition-opacity duration-300"
+        id="fullscreenBtn"
+      >
+        <div
+          class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"
+        >
+          <i
+            data-lucide="maximize"
+            class="stroke-white w-5 h-5 drop-shadow-md"
+          ></i>
+        </div>
+      </div>
+
+      <div
+        id="mediaInfoModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 hidden backdrop-blur-sm transition-opacity duration-300"
+      >
+        <div
+          class="bg-black/50 rounded-2xl p-6 w-[85%] max-w-sm max-h-[80vh] overflow-y-auto border border-gray-700/50 shadow-2xl backdrop-blur-sm"
+        >
+          <h3 class="text-white text-lg font-bold mb-4 text-center">
+            Media Info
+          </h3>
+          <div id="mediaInfoContent" class="text-sm text-gray-300">
+            <div class="flex justify-center py-4">
+              <i
+                data-lucide="loader-2"
+                class="w-6 h-6 animate-spin text-gray-500"
+              ></i>
+            </div>
+          </div>
+          <button
+            id="closeMediaInfoBtn"
+            class="w-full mt-6 bg-gray-800/80 border border-gray-700/50 text-gray-200 py-2.5 rounded-lg font-medium hover:bg-gray-700 active:scale-95 transition-all"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      <div
+        id="deleteConfirmModal"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/20 hidden backdrop-blur-sm transition-opacity duration-300"
+      >
+        <div
+          class="bg-black/50 rounded-2xl p-6 w-[85%] max-w-sm border border-gray-700/50 shadow-2xl backdrop-blur-sm text-center"
+        >
+          <div
+            class="w-14 h-14 bg-secondary/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-secondary/20"
+          >
+            <i data-lucide="trash-2" class="text-secondary w-7 h-7"></i>
+          </div>
+          <h3 class="text-white text-lg font-bold mb-2">Delete Media</h3>
+          <p
+            class="text-secondary text-xs font-semibold px-4 mb-4 leading-relaxed"
+          >
+            ⚠️ Warning: This will permanently delete the source file from Emby!
+          </p>
+          <div
+            class="bg-gray-800/40 rounded-lg p-3 mb-6 border border-gray-700/30"
+          >
+            <p
+              id="deleteFileName"
+              class="text-gray-300 text-xs break-all opacity-80"
+            ></p>
+          </div>
+          <div class="flex space-x-3">
+            <button
+              id="cancelDeleteBtn"
+              class="flex-1 bg-gray-800/80 border border-gray-700/50 text-gray-300 py-2.5 rounded-lg font-medium active:scale-95 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              id="confirmDeleteBtn"
+              class="flex-1 bg-secondary text-white py-2.5 rounded-lg font-bold active:opacity-90 shadow-lg shadow-secondary/20 transition-all"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="bottom-info absolute bottom-20 left-4 right-4 z-20 transition-opacity duration-300 pointer-events-none"
+      >
+        <div
+          id="videoInfoArea"
+          class="mb-3 pointer-events-auto w-[75%] pr-4 cursor-pointer active:opacity-75 transition-opacity"
+        >
+          <h3
+            id="videoTitle"
+            class="text-white text-lg font-medium mb-1 drop-shadow-md truncate"
+          >
+            Initializing...
+          </h3>
+          <p
+            id="videoDescription"
+            class="text-gray-200 text-sm line-clamp-2 drop-shadow-md opacity-90"
+          >
+            Click the 'Profile' button at bottom right to configure server.
+          </p>
+        </div>
+
+        <div
+          class="relative h-1 bg-white/30 cursor-pointer pointer-events-auto mb-1"
+          id="progressBarContainer"
+        >
+          <div id="progressLine" class="progress-line w-0"></div>
+        </div>
+
+        <div class="flex justify-between text-xs text-gray-300 drop-shadow">
+          <span id="currentTime">00:00</span>
+          <span id="totalTime">00:00</span>
+        </div>
+      </div>
+
+      <div
+        class="bottom-nav absolute bottom-0 left-0 right-0 bg-black/50 backdrop-blur-sm z-30 transition-opacity duration-300 pb-2 pt-1"
+      >
+        <div class="flex justify-around items-center h-12">
+          <div id="viewModeBtn" class="nav-btn text-gray-400">
+            <i data-lucide="layout-grid" class="stroke-current w-5 h-5"></i>
+          </div>
+          <div id="playModeBtn" class="nav-btn text-gray-400">
+            <i data-lucide="repeat" class="stroke-current w-5 h-5"></i>
+          </div>
+          <div id="libraryBtn" class="nav-btn text-gray-400">
+            <i data-lucide="folder-open" class="stroke-current w-5 h-5"></i>
+          </div>
+          <div id="myBtn" class="nav-btn text-gray-400">
+            <i data-lucide="user-round" class="stroke-current w-5 h-5"></i>
+          </div>
+        </div>
+      </div>
+
+      <div id="profilePage" class="profile-layer text-white">
+        <div
+          class="absolute top-[calc(3.5rem+env(safe-area-inset-top))] bottom-0 left-0 w-full bg-black/50 backdrop-blur-sm pointer-events-none -z-10"
+        ></div>
+
+        <div
+          class="absolute top-0 left-0 w-full h-[calc(3.5rem+env(safe-area-inset-top))] border-b border-gray-700/50 bg-black/50 backdrop-blur-sm z-10 pt-[env(safe-area-inset-top)]"
+        >
+          <div class="flex items-center justify-center h-14 px-4 relative">
+            <span class="font-bold text-lg">Profile</span>
+            <button
+              id="closeProfileBtn"
+              class="absolute text-gray-400 right-5 w-10 h-10 flex items-center justify-center active:text-gray-300 focusable-item rounded-full"
+            >
+              <i data-lucide="chevron-down" class="w-6 h-6"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="absolute inset-0 overflow-y-auto overflow-x-hidden z-0">
+          <div
+            class="pt-[calc(3.5rem+env(safe-area-inset-top))] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"
+          >
+            <div class="mb-5 mt-5">
+              <h2 class="text-primary font-bold text-sm mb-5 flex items-center">
+                <i data-lucide="server" class="w-4 h-4 mr-2"></i>SMB Media
+                Source
+              </h2>
+              <div
+                class="space-y-4 bg-gray-800/40 p-4 rounded-lg border border-gray-700/50"
+              >
+                <div id="configShareField" class="hidden">
+                  <label class="text-gray-400 text-xs block mb-1.5"
+                    >SMB Share</label
+                  >
+                  <input
+                    type="text"
+                    id="configServer"
+                    placeholder="//192.168.1.10/videos"
+                    class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                  />
+                </div>
+                <div id="configCredentialsField" class="grid grid-cols-2 gap-2 hidden">
+                  <div>
+                    <label class="text-gray-400 text-xs block mb-1.5"
+                      >Username</label
+                    >
+                    <input
+                      type="text"
+                      id="configUser"
+                      placeholder="Username"
+                      class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                    />
+                  </div>
+                  <div>
+                    <label class="text-gray-400 text-xs block mb-1.5"
+                      >Password</label
+                    >
+                    <input
+                      type="password"
+                      id="configPwd"
+                      placeholder="Password"
+                      class="w-full bg-gray-900 text-white text-sm rounded px-3 py-2.5 outline-none border border-gray-700 focus:border-primary transition-colors focusable-item"
+                    />
+                  </div>
+                </div>
+                <div
+                  id="rowStatic"
+                  hidden
+                  tabindex="0"
+                  class="hidden focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configStatic').click();"
+                >
+                  <label
+                    for="configStatic"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >Guest access (no account)</label
+                  >
+                  <input
+                    type="checkbox"
+                    id="configStatic"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div
+                  id="rowAutoplay"
+                  tabindex="0"
+                  class="focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configAutoplay').click();"
+                >
+                  <label
+                    for="configAutoplay"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >Auto Play Next</label
+                  >
+                  <input
+                    type="checkbox"
+                    id="configAutoplay"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                    checked
+                  />
+                </div>
+                <div
+                  id="rowShortDrama"
+                  tabindex="0"
+                  class="focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configShortDrama').click();"
+                >
+                  <label
+                    for="configShortDrama"
+                    class="text-gray-300 text-sm cursor-pointer flex-1"
+                    >Short Drama Mode</label
+                  >
+                  <input
+                    type="checkbox"
+                    id="configShortDrama"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div
+                  id="rowDeleteMode"
+                  hidden
+                  tabindex="0"
+                  class="hidden focusable-item flex items-center justify-between py-2.5 px-3 bg-gray-900/40 rounded-lg border border-transparent hover:bg-gray-800/60 transition-all cursor-pointer group"
+                  onclick="document.getElementById('configDeleteMode').click();"
+                >
+                  <label
+                    for="configDeleteMode"
+                    class="text-yellow-500/90 text-sm cursor-pointer flex-1 font-medium"
+                    >Enable Media Deletion ⚠️</label
+                  >
+                  <input
+                    type="checkbox"
+                    id="configDeleteMode"
+                    class="rounded text-primary bg-gray-700 border-none w-4 h-4 pointer-events-none"
+                  />
+                </div>
+                <div class="flex space-x-3 pt-2">
+                  <button
+                    id="resetConfigBtn"
+                    hidden
+                    class="hidden flex-1 bg-gray-700 hover:bg-gray-600 text-white text-sm py-3 rounded-lg active:scale-95 transition-transform focusable-item"
+                  >
+                    Clear Mount State
+                  </button>
+                  <button
+                    id="saveConfigBtn"
+                    class="flex-1 bg-primary hover:bg-primary/90 text-white text-sm py-3 rounded-lg font-bold active:opacity-80 shadow-lg shadow-primary/20 focusable-item"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Divider -->
+            <div
+              class="border-t border-dashed border-gray-600 w-full mt-5 mb-5"
+            ></div>
+
+            <div>
+              <h2 class="text-primary font-bold text-sm mb-5 flex items-center">
+                <i data-lucide="badge-info" class="w-4 h-4 mr-2"></i>About
+              </h2>
+              <div
+                class="bg-gray-800/40 p-5 rounded-xl border border-gray-700/50 space-y-5 text-sm text-gray-300 leading-relaxed"
+              >
+                <div class="flex items-center">
+                  <h3 class="text-white font-bold text-2xl tracking-tight">
+                    📱 ShuffleBox
+                  </h3>
+                  <span
+                    class="ml-2 px-2 py-0.5 bg-primary/20 text-primary text-xs font-bold rounded-full border border-primary/30"
+                    >v1.1</span
+                  >
+                </div>
+
+                <div>
+                  <p class="text-gray-300">
+                    👋 Hi, I am
+                    <a
+                      href="https://github.com/juneix"
+                      target="_blank"
+                      class="text-primary hover:underline"
+                      >@Juneix</a
+                    >. ShuffleBox is a TikTok-style web player for Emby / Jellyfin.
+                    Experience your private media library in a whole new,
+                    immersive way. 🎉
+                  </p>
+                </div>
+
+                <div
+                  class="text-yellow-500/90 text-xs bg-yellow-500/10 p-3 rounded-lg border border-yellow-500/20"
+                >
+                  <i data-lucide="shield-check" class="w-3 h-3 mr-1 inline"></i>
+                  All data stays on your device. Free to use.
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">🔮 Playback</h4>
+                  <ul
+                    class="list-disc list-inside space-y-1 text-gray-400 text-xs mt-2"
+                  >
+                    <li>Native HTML5 player, best on modern devices.</li>
+                    <li>Older devices can use server transcoding.</li>
+                  </ul>
+                  <div
+                    class="bg-black/40 rounded-lg overflow-hidden border border-gray-700/50 mt-3"
+                  >
+                    <table
+                      class="w-full text-center text-[11px] leading-tight border-collapse"
+                    >
+                      <thead class="bg-gray-700/30 text-gray-400">
+                        <tr>
+                          <th
+                            class="px-2 py-1.5 border-r border-gray-700/50 font-medium"
+                          >
+                            Device
+                          </th>
+                          <th
+                            class="px-2 py-1.5 border-r border-gray-700/50 font-medium"
+                          >
+                            HEVC Decode
+                          </th>
+                          <th class="px-2 py-1.5 font-medium">AV1 Decode</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-gray-700/50 text-gray-400">
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            Apple
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            A9 (2015) / M1
+                          </td>
+                          <td class="px-2 py-1.5">A17 Pro (2023) / M3</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            Android
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            Budget Phones (2016)
+                          </td>
+                          <td class="px-2 py-1.5">Budget Phones (2024)</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-2 py-1.5 border-r border-gray-700/50 text-primary"
+                          >
+                            PC
+                          </td>
+                          <td class="px-2 py-1.5 border-r border-gray-700/50">
+                            Intel 6th-8th Gen iGPU
+                          </td>
+                          <td class="px-2 py-1.5">Intel 11th Gen iGPU</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">🧩 Tips & Tricks</h4>
+                  <ul
+                    class="list-disc list-inside space-y-1 text-gray-400 text-xs mt-2"
+                  >
+                    <li>Faster Importing: Use "Home Video" library type.</li>
+                    <li>
+                      Smoother Loading: Limit libraries to < 1,000 videos.
+                    </li>
+                    <li>
+                      Easier Managing: Use multiple libraries and playlists.
+                    </li>
+                    <li>
+                      PWA Support: Add to Home Screen or Install as App. 📲
+                    </li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">⌨️ Shortcuts</h4>
+                  <div
+                    class="bg-black/40 rounded-lg overflow-hidden border border-gray-700/50 mt-2"
+                  >
+                    <table class="w-full text-center text-[11px] leading-tight">
+                      <thead class="bg-gray-700/30 text-gray-400">
+                        <tr>
+                          <th
+                            class="px-3 py-1.5 font-medium border-r border-gray-700/50"
+                          >
+                            Key
+                          </th>
+                          <th class="px-3 py-1.5 font-medium">Function</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-gray-700/50 text-gray-400">
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            W / S / ↑ / ↓
+                          </td>
+                          <td class="px-3 py-1.5">Prev / Next Video</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            A / D / ← / →
+                          </td>
+                          <td class="px-3 py-1.5">Rewind / Forward 15s</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            Space / Click OK
+                          </td>
+                          <td class="px-3 py-1.5">Pause / Play</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            U / Double Click OK
+                          </td>
+                          <td class="px-3 py-1.5">Favorite Video</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            J / Menu Key
+                          </td>
+                          <td class="px-2 py-1.5">Toggle Aspect Ratio</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            M
+                          </td>
+                          <td class="px-3 py-1.5">Toggle Mute</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            I
+                          </td>
+                          <td class="px-3 py-1.5">Profile</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            E
+                          </td>
+                          <td class="px-3 py-1.5">Toggle View</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            R
+                          </td>
+                          <td class="px-3 py-1.5">Sequential / Random</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            F
+                          </td>
+                          <td class="px-3 py-1.5">Toggle Fullscreen</td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            G
+                          </td>
+                          <td class="px-3 py-1.5">Select Library</td>
+                        </tr>
+
+                        <tr>
+                          <td
+                            class="px-3 py-1.5 text-primary border-r border-gray-700/50"
+                          >
+                            V
+                          </td>
+                          <td class="px-3 py-1.5">Media Info</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-gray-300">🚀 Get Involved</h4>
+                  <ul
+                    class="list-disc list-inside space-y-1 text-gray-400 text-xs mt-3"
+                  >
+                    <li>
+                      <span class="text-gray-300 font-medium">Community:</span>
+                      Follow the latest updates.
+                    </li>
+                    <li>
+                      <span class="text-gray-300 font-medium">Support:</span>
+                      Help me build more cool stuff.
+                    </li>
+                  </ul>
+                  <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-4">
+                    <a
+                      href="https://x.com/juneix_tse"
+                      target="_blank"
+                      class="flex items-center justify-center text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-full transition-colors border border-white/20 text-[10px] whitespace-nowrap"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/x/white"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="X"
+                      />
+                      Twitter • Follow</a
+                    >
+                    <a
+                      href="https://t.me/juneix_en"
+                      target="_blank"
+                      class="flex items-center justify-center text-[#26A5E4] bg-[#26A5E4]/10 hover:bg-[#26A5E4]/20 px-3 py-1.5 rounded-full transition-colors border border-[#26A5E4]/20 text-[10px] whitespace-nowrap"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/telegram/26A5E4"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="Telegram"
+                      />
+                      Telegram • Channel</a
+                    >
+                    <a
+                      href="https://ko-fi.com/juneixtse"
+                      target="_blank"
+                      class="flex items-center justify-center text-[#FF6433] bg-[#FF5E5B]/10 hover:bg-[#FF5E5B]/20 px-3 py-1.5 rounded-full transition-colors border border-[#FF5E5B]/20 text-[10px] whitespace-nowrap"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/kofi/FF6433"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="Ko-fi"
+                      />
+                      Ko-fi • Support</a
+                    >
+                    <a
+                      href="https://github.com/juneix"
+                      target="_blank"
+                      class="flex items-center justify-center text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-full transition-colors border border-white/20 text-[10px] whitespace-nowrap active:scale-95"
+                    >
+                      <img
+                        src="https://cdn.simpleicons.org/github/white"
+                        class="w-3.5 h-3.5 mr-1.5"
+                        alt="GitHub"
+                      />
+                      GitHub • Source</a
+                    >
+                  </div>
+                </div>
+
+                <div
+                  class="pt-4 border-t border-gray-700/50 text-xs text-gray-500 text-center flex flex-col space-y-1"
+                >
+                  <p>
+                    Made with ❤️ by
+                    <a
+                      href="https://juneix.github.io"
+                      target="_blank"
+                      class="text-primary hover:underline"
+                      >Juneix</a
+                    >
+                  </p>
+                  <p>© 2026 All Rights Reserved</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        id="libraryModal"
+        class="fixed inset-0 bg-black/20 z-50 flex items-center justify-center hidden backdrop-blur-sm transition-opacity duration-300"
+      >
+        <div
+          class="bg-black/50 rounded-xl p-5 w-[90%] max-w-lg max-h-[70vh] overflow-y-auto border border-gray-700/50 shadow-2xl backdrop-blur-sm"
+        >
+          <h3 class="text-white text-lg font-bold mb-4 text-center">
+            Select Library
+          </h3>
+          <div id="librariesList" class="grid grid-cols-2 gap-2"></div>
+          <button
+            id="closeLibraryBtn"
+            class="w-full mt-4 bg-white/10 border border-white/10 text-gray-300 py-2.5 rounded text-sm hover:bg-white/20 font-medium active:scale-95 transition-all focusable-item"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      <div id="tagDrawer" class="tag-drawer text-white">
+        <div class="h-full flex flex-col pt-[env(safe-area-inset-top)]">
+          <div class="h-14 px-4 border-b border-gray-700/50 flex items-center justify-between shrink-0"><span class="font-bold text-lg">Video tags</span><button id="closeTagDrawerBtn" type="button" class="text-gray-400 p-2 active:text-gray-300"><i data-lucide="x" class="w-5 h-5"></i></button></div>
+          <div class="flex-1 overflow-y-auto px-4 py-5"><p class="text-sm text-gray-400 mb-3">Choose tags for the current video</p><div id="tagList" class="flex flex-wrap gap-2"></div><p id="emptyTagsHint" class="text-sm text-gray-500 py-6 text-center">No tags yet. Create one to get started.</p><div id="newTagForm" class="hidden mt-5 p-4 rounded-lg border border-gray-700/50 bg-gray-800/40"><label for="newTagInput" class="text-sm text-gray-300 block mb-2">Tag name</label><input id="newTagInput" type="text" maxlength="8" placeholder="Up to 8 characters" class="w-full rounded border border-gray-600 bg-black/40 px-3 py-2.5 text-white text-sm outline-none focus:border-primary" /><div class="flex gap-2 mt-3"><button id="cancelNewTagBtn" type="button" class="flex-1 border border-gray-600 text-gray-300 py-2.5 rounded text-sm">Cancel</button><button id="saveNewTagBtn" type="button" class="flex-1 bg-primary/20 border border-primary/50 text-primary py-2.5 rounded text-sm font-medium">Save</button></div></div><button id="newTagBtn" type="button" class="w-full mt-5 border border-primary/50 text-primary bg-primary/10 py-2.5 rounded text-sm font-medium"><i data-lucide="plus" class="w-4 h-4 inline-block align-text-bottom mr-1"></i>New tag</button></div>
+          <div class="p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-gray-700/50"><button id="saveVideoTagsBtn" type="button" class="w-full bg-primary/20 border border-primary/50 text-primary py-2.5 rounded text-sm font-medium">Save</button></div>
+        </div>
+      </div>
+
+      <div
+        id="toast"
+        class="fixed top-16 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-2 rounded-2xl text-white text-sm pointer-events-none transition-opacity duration-300 opacity-0 z-[100] w-max max-w-[80vw] whitespace-normal text-center border border-white/10 backdrop-blur-sm"
+      >
+        Message
+      </div>
+      <div
+        id="loading"
+        class="fixed inset-0 z-40 flex items-center justify-center bg-transparent pointer-events-none hidden"
+      >
+        <div
+          class="w-10 h-10 border-4 border-gray-600 border-t-primary rounded-full animate-spin"
+        ></div>
+      </div>
+    </div>
+
+    <script>
+      /* Styles */
+      class EmbyApp {
+        constructor() {
+          this.state = {
+            videos: [],
+            currentIndex: 0,
+            isPlaying: false,
+            favorites: new Set(),
+            tags: [],
+            selectedTags: new Set(),
+            playMode: "sequence",
+            viewMode: "stream",
+            isAutoplay: true,
+            currentTab: "home",
+            currentLibraryId: null,
+            isScaleFill: true,
+            isMuted: false,
+            lastReportTime: 0,
+            playSessionId: null,
+            playbackGeneration: 0,
+            originalVideos: [],
+          };
+
+          this.config = {
+            server: "",
+            user: "",
+            token: "",
+            userId: "",
+            useStatic: true,
+            autoplay: true,
+            shortDrama: false,
+            deleteMode: false,
+          };
+          // Compare against the server-confirmed SMB configuration so saving
+          // playback preferences does not remount the share or reload the app.
+          this.smbConfig = null;
+          this.adminSettingsEnabled = false;
+
+          this.csTimer = null;
+          this.feedObserver = null;
+          this.feedIntersectionRatios = new Map();
+          this.feedActiveIndex = null;
+          this.feedActivationToken = 0;
+          this.feedObserverThreshold = 0.75;
+
+          this.dom = {};
+          this.config.deviceName = this.getDeviceName();
+          this.init();
+        }
+
+        getDeviceName() {
+          const ua = navigator.userAgent;
+          if (/android/i.test(ua)) {
+            const match = ua.match(/\(([^)]+)\)/);
+            if (match && match[1]) {
+              const parts = match[1].split(";");
+              for (let p of parts) {
+                p = p.trim();
+                if (
+                  /^linux/i.test(p) ||
+                  /^u$/i.test(p) ||
+                  /^android/i.test(p) ||
+                  /^[a-z]{2}-[a-z]{2}$/i.test(p) ||
+                  /wv/.test(p)
+                )
+                  continue;
+                const model = p.split("Build/")[0].trim();
+                if (model) return `Android (${model})`;
+              }
+            }
+            return "Android";
+          } else if (
+            /ipad|macintosh/i.test(ua) &&
+            navigator.maxTouchPoints > 1
+          ) {
+            return "iPad";
+          } else if (/iphone/i.test(ua)) {
+            return "iPhone";
+          } else if (/macintosh/i.test(ua)) {
+            return "macOS";
+          } else if (/windows/i.test(ua)) {
+            return "Windows";
+          }
+          return "Web Browser";
+        }
+
+        isAnyModalOpen() {
+          const modals = [
+            "mediaInfoModal",
+            "deleteConfirmModal",
+            "profilePage",
+            "libraryModal",
+            "tagDrawer",
+          ];
+          return modals.some((id) => {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            if (id === "profilePage" || id === "tagDrawer") return el.classList.contains("active");
+            return !el.classList.contains("hidden");
+          });
+        }
+
+        init() {
+          this.cacheDOM();
+          this.loadConfig();
+
+          // Dynamic app version detection: extract from HTML (e.g. v1.1 -> 1.1)
+          const vEl = document.querySelector(".bg-primary\\/20.text-xs");
+          this.config.appVersion = vEl
+            ? vEl.textContent.replace("v", "").trim()
+            : "1.1";
+
+          this.loadFavorites();
+          this.bindEvents();
+
+          this.state.isAutoplay = this.config.autoplay !== false;
+
+          // Sync UI based on loaded stated
+          if (this.dom.muteBtn) {
+            const iconName = this.state.isMuted ? "volume-x" : "volume-2";
+            const iconColor = this.state.isMuted
+              ? "text-secondary"
+              : "stroke-white";
+            this.dom.muteBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${iconName}" class="${iconColor} w-6 h-6 drop-shadow-md"></i></div>`;
+          }
+          if (this.dom.scaleBtn) {
+            this.dom.scaleBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isScaleFill ? "maximize-2" : "minimize-2"}" class="stroke-white w-6 h-6 drop-shadow-md"></i></div>`;
+          }
+
+          const viewBtn = this.dom.viewModeBtn;
+          viewBtn.innerHTML = `<i data-lucide="gallery-vertical" class="stroke-current w-5 h-5"></i>`;
+
+          const playBtn = this.dom.playModeBtn;
+          // If random mode is saved, show shuffle icon. Otherwise show repeat/repeat-1 based on isAutoplay
+          const isSeq = this.state.playMode === "sequence";
+          const playIcon = isSeq
+            ? this.state.isAutoplay
+              ? "repeat"
+              : "repeat-1"
+            : "shuffle";
+          playBtn.innerHTML = `<i data-lucide="${playIcon}" class="stroke-current w-5 h-5"></i>`;
+
+          lucide.createIcons();
+
+          this.restoreMediaPreferences().finally(() => fetch("/api/status")
+            .then((res) => res.json())
+            .then((status) => {
+              if (status.configured && !status.error) {
+                this.fetchVideos(
+                  this.state.currentLibraryId,
+                  null,
+                  false,
+                  this.state.playMode === "random",
+                );
+              } else {
+                if (status.error)
+                  this.showToast(`SMB mount failed: ${status.error}`);
+                setTimeout(() => this.toggleModal("profilePage", true), 500);
+              }
+            })
+            .catch(() => {
+              this.showToast("Cannot connect to the ShuffleBox SMB backend");
+              setTimeout(() => this.toggleModal("profilePage", true), 500);
+            }));
+
+          // ─── Branding Egg ───
+          console.log(
+            "%c ShuffleBox %c Designed by Juneix %c",
+            "background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px 0 0 4px;font-weight:bold;",
+            "background:#1e293b;color:#fff;padding:2px 6px;border-radius:0 4px 4px 0;",
+            "background:transparent",
+          );
+        }
+
+        cacheDOM() {
+          const ids = [
+            "videoContainer",
+            "clickToPlayOverlay",
+            "loading",
+            "toast",
+            "videoInfoArea",
+            "videoTitle",
+            "videoDescription",
+            "progressLine",
+            "currentTime",
+            "totalTime",
+            "playModeBtn",
+            "viewModeBtn",
+            "libraryBtn",
+            "myBtn",
+            "favoriteBtn",
+            "tagBtn",
+            "muteBtn",
+            "fullscreenBtn",
+            "deleteBtn",
+            "mediaInfoModal",
+            "mediaInfoContent",
+            "closeMediaInfoBtn",
+            "deleteConfirmModal",
+            "confirmDeleteBtn",
+            "cancelDeleteBtn",
+            "deleteFileName",
+            "configServer",
+            "configUser",
+            "configPwd",
+            "configStatic",
+            "configAutoplay",
+            "configShortDrama",
+            "configDeleteMode",
+          ];
+          ids.forEach((id) => (this.dom[id] = document.getElementById(id)));
+          this.dom.rightToolbar = document.querySelector(".right-toolbar");
+        }
+
+        migrateLegacyStorage() {
+          const migrations = [
+            ["embyx_smb_user", "shufflebox_smb_user"],
+            ["embyx_smb_share", "shufflebox_smb_share"],
+            ["embyx_smb_guest", "shufflebox_smb_guest"],
+            ["emby_autoplay", "shufflebox_autoplay"],
+            ["emby_shortdrama", "shufflebox_shortdrama"],
+            ["emby_delete_mode", "shufflebox_delete_mode"],
+            ["emby_device_id", "shufflebox_device_id"],
+            ["emby_favorites", "shufflebox_favorites"],
+            ["emby_views_cache", "shufflebox_views_cache"],
+            ["emby_lib_id", "shufflebox_lib_id"],
+            ["emby_lib_type", "shufflebox_lib_type"],
+            ["emby_collapsed_group_paths", "shufflebox_collapsed_group_paths"],
+            ["emby_is_scale_fill", "shufflebox_is_scale_fill"],
+            ["emby_is_muted", "shufflebox_is_muted"],
+            ["emby_play_mode", "shufflebox_play_mode"],
+          ];
+          for (const [legacyKey, currentKey] of migrations) {
+            if (localStorage.getItem(currentKey) === null) {
+              const legacyValue = localStorage.getItem(legacyKey);
+              if (legacyValue !== null) localStorage.setItem(currentKey, legacyValue);
+            }
+            localStorage.removeItem(legacyKey);
+          }
+        }
+
+        loadConfig() {
+          this.migrateLegacyStorage();
+          this.config.server = location.origin;
+          this.config.user = localStorage.getItem("shufflebox_smb_user") || "";
+          this.config.token = "local-smb";
+          this.config.userId = "local";
+          this.config.share = localStorage.getItem("shufflebox_smb_share") || "";
+          this.config.guest =
+            localStorage.getItem("shufflebox_smb_guest") === "true";
+          this.config.useStatic = true;
+          this.config.autoplay =
+            localStorage.getItem("shufflebox_autoplay") !== "false";
+          this.config.shortDrama =
+            localStorage.getItem("shufflebox_shortdrama") === "true";
+          this.config.deleteMode =
+            localStorage.getItem("shufflebox_delete_mode") === "true";
+
+          // Unique Device ID for session management
+          if (!localStorage.getItem("shufflebox_device_id")) {
+            const randomId = Math.random().toString(36).slice(2, 10);
+            localStorage.setItem("shufflebox_device_id", `ShuffleBox-${randomId}`);
+          }
+          this.config.deviceId = localStorage.getItem("shufflebox_device_id");
+          this.config.playbackControlId = `${this.config.deviceId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+          const savedScale = localStorage.getItem("shufflebox_is_scale_fill");
+          if (savedScale !== null)
+            this.state.isScaleFill = savedScale === "true";
+
+          const savedMute = localStorage.getItem("shufflebox_is_muted");
+          if (savedMute !== null) this.state.isMuted = savedMute === "true";
+
+          const savedPlayMode = localStorage.getItem("shufflebox_play_mode");
+          if (savedPlayMode !== null) this.state.playMode = savedPlayMode;
+          if (this.config.shortDrama) this.state.playMode = "sequence";
+
+          const savedLibId = localStorage.getItem("shufflebox_lib_id");
+          const savedLibType = localStorage.getItem("shufflebox_lib_type");
+          if (savedLibId) {
+            this.state.currentLibraryId = savedLibId;
+            this.state.currentLibraryType = savedLibType || "library";
+          }
+
+          if (this.dom.configServer)
+            this.dom.configServer.value = this.config.share;
+          if (this.dom.configUser) this.dom.configUser.value = this.config.user;
+          if (this.dom.configPwd && this.config.share)
+            this.dom.configPwd.value = "********";
+          if (this.dom.configStatic)
+            this.dom.configStatic.checked = this.config.guest;
+          if (this.dom.configAutoplay)
+            this.dom.configAutoplay.checked = this.config.autoplay;
+          if (this.dom.configShortDrama)
+            this.dom.configShortDrama.checked = this.config.shortDrama;
+          if (this.dom.configDeleteMode)
+            this.dom.configDeleteMode.checked = this.config.deleteMode;
+
+          fetch("/api/smb/config")
+            .then((res) => res.json())
+            .then((remote) => {
+              this.setAdminSettingsVisibility(remote.adminSettingsEnabled === true);
+              this.smbConfig = remote;
+              if (remote.share) {
+                this.config.share = remote.share;
+                this.config.user = remote.username || "";
+                this.config.guest = remote.guest === true;
+                this.config.deleteMode = remote.deleteMode === true;
+                this.dom.configServer.value = remote.share;
+                this.dom.configUser.value = remote.username || "";
+                this.dom.configPwd.value = remote.hasPassword ? "********" : "";
+                this.dom.configStatic.checked = remote.guest === true;
+                this.dom.configDeleteMode.checked = remote.deleteMode === true;
+                this.dom.deleteBtn.style.display = remote.deleteMode
+                  ? "flex"
+                  : "none";
+              }
+            })
+            .catch(() => {});
+
+          // Sync UI based on config
+          this.dom.deleteBtn.style.display = this.config.deleteMode
+            ? "flex"
+            : "none";
+          if (this.dom.playModeBtn) {
+            this.dom.playModeBtn.innerHTML = `<i data-lucide="${this.config.autoplay ? "repeat" : "repeat-1"}" class="stroke-current w-5 h-5"></i>`;
+            lucide.createIcons();
+          }
+        }
+
+        setAdminSettingsVisibility(enabled) {
+          this.adminSettingsEnabled = enabled;
+          ["configShareField", "configCredentialsField", "rowStatic", "rowDeleteMode", "resetConfigBtn"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+              el.hidden = !enabled;
+              el.classList.toggle("hidden", !enabled);
+            }
+          });
+          if (!enabled) {
+            this.config.share = "";
+            this.config.user = "";
+            this.config.deleteMode = false;
+            if (this.dom.configServer) this.dom.configServer.value = "";
+            if (this.dom.configUser) this.dom.configUser.value = "";
+            if (this.dom.configPwd) this.dom.configPwd.value = "";
+            ["shufflebox_smb_share", "shufflebox_smb_user", "shufflebox_delete_mode"].forEach((key) =>
+              localStorage.removeItem(key),
+            );
+          }
+        }
+
+        async restoreMediaPreferences() {
+          try {
+            const res = await fetch("/api/media/preferences");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const saved = await res.json();
+            if (saved.libraryId) {
+              this.state.currentLibraryId = saved.libraryId;
+              this.state.currentLibraryType = saved.libraryType || "library";
+              localStorage.setItem("shufflebox_lib_id", saved.libraryId);
+              localStorage.setItem("shufflebox_lib_type", this.state.currentLibraryType);
+            }
+          } catch (error) {
+            console.warn("Unable to restore server media preferences:", error);
+          }
+        }
+
+        async saveMediaPreferences() {
+          const payload = {
+            libraryId: this.state.currentLibraryId || "",
+            libraryType: this.state.currentLibraryType || "library",
+            collapsedGroupPaths: [],
+          };
+          const res = await fetch("/api/media/preferences", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          localStorage.setItem("shufflebox_lib_id", payload.libraryId);
+          localStorage.setItem("shufflebox_lib_type", payload.libraryType);
+        }
+
+        async saveConfig() {
+          if (!this.adminSettingsEnabled) {
+            const autoplay = this.dom.configAutoplay.checked;
+            const shortDrama = this.dom.configShortDrama.checked;
+            localStorage.setItem("shufflebox_autoplay", autoplay);
+            localStorage.setItem("shufflebox_shortdrama", shortDrama);
+            this.config.autoplay = autoplay;
+            this.config.shortDrama = shortDrama;
+            this.state.isAutoplay = autoplay;
+            if (shortDrama) this.state.playMode = "sequence";
+            this.showToast("Settings saved");
+            return;
+          }
+          const share = this.dom.configServer.value.trim().replace(/\\/g, "/");
+          const username = this.dom.configUser.value.trim();
+          const password = this.dom.configPwd.value;
+          const guest = this.dom.configStatic.checked;
+          const autoplay = this.dom.configAutoplay.checked;
+          const shortDrama = this.dom.configShortDrama.checked;
+          const deleteMode = this.dom.configDeleteMode.checked;
+
+          const currentSmb = this.smbConfig || {
+            share: this.config.share || "",
+            username: this.config.user || "",
+            guest: Boolean(this.config.guest),
+            deleteMode: Boolean(this.config.deleteMode),
+            vers: "3.0",
+            hasPassword: this.dom.configPwd.value === "********",
+          };
+          // The masked password means “keep the stored password”; a typed or
+          // cleared stored password is a credential change.
+          const passwordChanged = !guest && password !== "********" &&
+            (Boolean(currentSmb.hasPassword) || password !== "");
+          const smbChanged =
+            share !== (currentSmb.share || "") ||
+            username !== (currentSmb.username || "") ||
+            guest !== Boolean(currentSmb.guest) ||
+            deleteMode !== Boolean(currentSmb.deleteMode) ||
+            "3.0" !== (currentSmb.vers || "3.0") ||
+            passwordChanged;
+
+          const savePreferences = () => {
+            localStorage.setItem("shufflebox_autoplay", autoplay);
+            localStorage.setItem("shufflebox_shortdrama", shortDrama);
+            localStorage.setItem("shufflebox_delete_mode", deleteMode);
+            this.config.autoplay = autoplay;
+            this.config.shortDrama = shortDrama;
+            this.config.deleteMode = deleteMode;
+            this.state.isAutoplay = autoplay;
+            if (shortDrama) this.state.playMode = "sequence";
+            this.dom.deleteBtn.style.display = deleteMode ? "flex" : "none";
+          };
+
+          if (!smbChanged) {
+            savePreferences();
+            this.showToast("Settings saved");
+            return;
+          }
+
+          if (!/^\/\/[^/]+\/[^/]+/.test(share))
+            return this.showToast("Use the SMB format //server/share");
+          if (!guest && !username)
+            return this.showToast(
+              "Enter an SMB username or enable guest access",
+            );
+
+          this.toggleLoading(true);
+          try {
+            const res = await fetch("/api/smb/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                share,
+                username,
+                password,
+                guest,
+                deleteMode,
+                vers: "3.0",
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            localStorage.setItem("shufflebox_smb_share", share);
+            localStorage.setItem("shufflebox_smb_user", username);
+            localStorage.setItem("shufflebox_smb_guest", guest);
+            savePreferences();
+            localStorage.removeItem("shufflebox_views_cache");
+            localStorage.removeItem("shufflebox_lib_id");
+            localStorage.removeItem("shufflebox_lib_type");
+            this.showToast(`Mounted; found ${data.itemCount || 0} videos`);
+            setTimeout(() => location.reload(), 500);
+          } catch (error) {
+            console.error("SMB config error:", error);
+            this.showToast(`SMB mount failed: ${error.message}`);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async resetConfig() {
+          if (!confirm("Clear the current SMB mount state? Other playback settings will be kept."))
+            return;
+          this.toggleLoading(true);
+          try {
+            const res = await fetch("/api/smb/config", { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            [
+              "shufflebox_smb_share",
+              "shufflebox_smb_user",
+              "shufflebox_smb_guest",
+              "shufflebox_views_cache",
+              "shufflebox_lib_id",
+              "shufflebox_lib_type",
+            ].forEach((key) => localStorage.removeItem(key));
+            this.showToast("SMB mount state cleared");
+            setTimeout(() => location.reload(), 500);
+          } catch (error) {
+            console.error("Clear SMB mount state error:", error);
+            this.showToast(`Failed to clear mount state: ${error.message}`);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async loadFavorites() {
+          const { server, token, userId } = this.config;
+          if (!server || !token || !userId) {
+            const saved = localStorage.getItem("shufflebox_favorites");
+            if (saved) this.state.favorites = new Set(JSON.parse(saved));
+            return;
+          }
+          try {
+            const res = await fetch(
+              `${server}/emby/Users/${userId}/Items?api_key=${token}&Recursive=true&Filters=IsFavorite&Fields=Id`,
+            );
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.Items) {
+                this.state.favorites = new Set(
+                  data.Items.map((i) => String(i.Id)),
+                );
+                localStorage.setItem(
+                  "shufflebox_favorites",
+                  JSON.stringify([...this.state.favorites]),
+                );
+                this.updateUI();
+              }
+            }
+          } catch (e) {
+            console.error("Failed to load remote Favorites:", e);
+            const saved = localStorage.getItem("shufflebox_favorites");
+            if (saved) this.state.favorites = new Set(JSON.parse(saved));
+          }
+        }
+
+        async fetchVideos(
+          parentId = null,
+          ids = null,
+          isLoadMore = false,
+          isRandom = false,
+          isAppend = false,
+        ) {
+          this.toggleLoading(!isAppend);
+          try {
+            const { server, token, userId } = this.config;
+            if (!server || !token) {
+              if (!isAppend) this.showToast("Please config server first");
+              return;
+            }
+
+            if (!isLoadMore && !isAppend) {
+              this.state.startIndex = 0;
+            }
+
+            const libraryId = parentId || this.state.currentLibraryId;
+
+            const PAGE_SIZE = 20;
+            // const MAX_GRID_VIDEOS = 1000;
+
+            let fetchStartIndex = this.state.startIndex || 0;
+            if (isAppend) {
+              fetchStartIndex += this.state.videos.length;
+            }
+
+            let url = `${server}/emby/Users/${userId}/Items?api_key=${token}&Recursive=true&IncludeItemTypes=Movie,Episode,Video,MusicVideo&Limit=${PAGE_SIZE}&StartIndex=${fetchStartIndex}&Fields=Overview,Path,RunTimeTicks,MediaSources`;
+
+            if (ids) {
+              url += `&Ids=${ids}`;
+            } else if (isRandom) {
+              const nonce = isAppend && this.state.shuffleSeed
+                ? this.state.shuffleSeed
+                : this.createShuffleSeed();
+              this.state.shuffleSeed = nonce;
+              url += `&SortBy=Random&RandomSeed=${encodeURIComponent(nonce)}`;
+              if (libraryId && libraryId !== "favorites")
+                url += `&ParentId=${libraryId}`;
+              if (libraryId === "favorites") url += `&Filters=IsFavorite`;
+            } else if (libraryId === "favorites") {
+              url += `&SortBy=DateCreated&SortOrder=Descending&Filters=IsFavorite`;
+            } else if (libraryId) {
+              const sortStr = this.config.shortDrama
+                ? "SortBy=Path&SortOrder=Ascending"
+                : "SortBy=DateCreated&SortOrder=Descending";
+              url += `&${sortStr}&ParentId=${libraryId}`;
+            } else {
+              const sortStr = this.config.shortDrama
+                ? "SortBy=Path&SortOrder=Ascending"
+                : "SortBy=DateCreated&SortOrder=Descending";
+              url += `&${sortStr}`;
+            }
+
+            const res = await fetch(url, {
+              headers: {
+                "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+              },
+            });
+            if (!res.ok) {
+              throw new Error(`Server Error: ${res.status}`);
+            }
+            let data = await res.json();
+
+            if (data && data.Items && data.Items.length > 0) {
+              if (isAppend) {
+                const startIndex = this.state.videos.length;
+                this.state.videos.push(...data.Items);
+                if (
+                  this.state.playMode === "random" &&
+                  this.state.originalVideos
+                ) {
+                  this.state.originalVideos.push(...data.Items);
+                }
+                this.appendFeedItems(data.Items, startIndex);
+                return;
+              } else {
+                this.state.videos = data.Items;
+                this.state.currentIndex = 0;
+                this.state.totalCount = data.TotalRecordCount || 0;
+
+                if (this.state.playMode === "random") {
+                  this.state.originalVideos = [...this.state.videos];
+                  if (!isRandom) this._shuffleAroundCurrent();
+                }
+
+                if (this.state.viewMode === "grid") {
+                  this.renderGridView();
+                } else {
+                  this.renderSlides();
+                }
+              }
+            } else if (isLoadMore || isAppend) {
+              if (!isAppend) this.showToast("No more videos");
+              this.state.startIndex = Math.max(0, this.state.startIndex || 0);
+              this.toggleLoading(false);
+              return;
+            } else {
+              this.showToast("No videos found");
+              this.dom.videoContainer.innerHTML = "";
+            }
+          } catch (e) {
+            console.error("Failed to fetch videos:", e);
+            this.showToast(
+              "Cannot connect to server: " + (e.message || "Unknown error"),
+            );
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        renderGridView() {
+          this.disconnectFeedObserver();
+          this.feedActivationToken += 1;
+          this.feedActiveIndex = null;
+          const container = this.dom.videoContainer;
+          container.querySelectorAll("video").forEach((video) => this.releaseVideoElement(video));
+          // Reset page scroll (scrollIntoView can pollute html.scrollTop causing header misalignment)
+          document.documentElement.scrollTop = 0;
+          container.innerHTML = "";
+          container.className =
+            "absolute inset-0 z-10 bg-black/40 overflow-hidden flex flex-col";
+
+          const currentVideo = this.state.videos[this.state.currentIndex];
+          const bgPosterStr = currentVideo
+            ? this.getImageSrc(currentVideo)
+            : "";
+          const bgLayer = document.createElement("div");
+          bgLayer.className =
+            "absolute inset-0 bg-cover bg-center opacity-70 scale-[1.15] blur-xl z-[-1] pointer-events-none";
+          if (bgPosterStr) {
+            const imgL = new Image();
+            imgL.crossOrigin = "anonymous";
+            imgL.referrerPolicy = "no-referrer";
+            imgL.src = bgPosterStr;
+            imgL.onerror = () => {
+              bgLayer.style.backgroundImage = `url('${this.getImageSrc(null)}')`;
+            };
+            bgLayer.style.backgroundImage = `url('${bgPosterStr}')`;
+          }
+          container.appendChild(bgLayer);
+
+          const gridWrapper = document.createElement("div");
+          const safeHeader = document.createElement("div");
+
+          let libraryName = "All Videos";
+          if (this.state.currentLibraryId === "favorites") {
+            libraryName = "Favorites";
+          } else if (this.state.currentLibraryId) {
+            const libIdStr = String(this.state.currentLibraryId);
+            const cachedViewsStr = localStorage.getItem("shufflebox_views_cache");
+            if (cachedViewsStr) {
+              try {
+                const cached = JSON.parse(cachedViewsStr);
+                let found = null;
+                if (cached.views && cached.views.Items) {
+                  found = cached.views.Items.find(
+                    (i) => String(i.Id) === libIdStr,
+                  );
+                }
+                if (!found && cached.playlists && cached.playlists.Items) {
+                  found = cached.playlists.Items.find(
+                    (i) => String(i.Id) === libIdStr,
+                  );
+                }
+                if (found) libraryName = found.Name;
+              } catch (e) {}
+            }
+          }
+
+          const PAGE_SIZE = 20;
+          const totalCount = this.state.totalCount || 0;
+          const startIndex = this.state.startIndex || 0;
+          const currentPage = Math.floor(startIndex / PAGE_SIZE) + 1;
+          const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+          const isSpecificLib = !!this.state.currentLibraryId;
+          const showPager = isSpecificLib && totalPages > 1;
+
+          const countStr = totalCount > 999 ? "999+" : String(totalCount);
+
+          safeHeader.className =
+            "w-full flex items-center gap-2 bg-black/50 backdrop-blur-sm border-b border-gray-800/50 px-3 pb-3";
+          safeHeader.style.paddingTop =
+            "max(8px, env(safe-area-inset-top, 8px))";
+
+          safeHeader.innerHTML = `
+                    <span class="text-sm font-bold text-gray-200">${libraryName}</span>
+                    <span class="text-xs font-bold text-primary/70 tabular-nums flex items-center">
+                        ${countStr}
+                        <span class="w-1.5"></span>
+                        <button id="gridShuffleBtn" title="Shuffle Videos" class="active:scale-90 transition-transform p-[2px] bg-white/10 rounded-full hover:bg-white/20">
+                            <i data-lucide="sparkles" class="w-3.5 h-3.5 text-white"></i>
+                        </button>
+                    </span>
+                    <span class="flex-1"></span>
+                    ${
+                      showPager
+                        ? `
+                        <button id="gridPrevBtn" class="px-1.5 py-0.5 rounded text-xs ${currentPage <= 1 ? "text-gray-600 pointer-events-none" : "text-gray-300 active:scale-90 hover:text-white transition-colors"}">❮</button>
+                        <span class="text-xs font-bold text-white tabular-nums">${currentPage}<span class="px-0.5">/</span>${totalPages}</span>
+                        <button id="gridNextBtn" class="px-1.5 py-0.5 rounded text-xs ${currentPage >= totalPages ? "text-gray-600 pointer-events-none" : "text-gray-300 active:scale-90 hover:text-white transition-colors"}">❯</button>
+                    `
+                        : ""
+                    }
+                `;
+          container.appendChild(safeHeader);
+
+          const shuffleBtn = document.getElementById("gridShuffleBtn");
+          if (shuffleBtn) {
+            const curLibId = this.state.currentLibraryId;
+            const libArg =
+              !curLibId || curLibId === "favorites" ? null : curLibId;
+            shuffleBtn.onclick = (e) => {
+              e.stopPropagation();
+              this.state.startIndex = 0;
+              this.fetchVideos(libArg, null, false, true); // isRandom=true
+            };
+          }
+
+          if (showPager) {
+            const curLibId = this.state.currentLibraryId;
+            const libArg = curLibId === "favorites" ? null : curLibId;
+
+            const prevBtn = document.getElementById("gridPrevBtn");
+            if (prevBtn && currentPage > 1) {
+              prevBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.state.startIndex = Math.max(0, startIndex - PAGE_SIZE);
+                this.fetchVideos(libArg, null, true, false);
+              };
+            }
+            const nextBtn = document.getElementById("gridNextBtn");
+            if (nextBtn && currentPage < totalPages) {
+              nextBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.state.startIndex = startIndex + PAGE_SIZE;
+                this.fetchVideos(libArg, null, true, false);
+              };
+            }
+          }
+
+          const scrollArea = document.createElement("div");
+          scrollArea.className =
+            "flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative w-full overscroll-contain";
+          scrollArea.style.WebkitOverflowScrolling = "touch";
+          container.appendChild(scrollArea);
+
+          // MOUSE DRAG SUPPORT FOR GRID
+          let isDown = false;
+          let startY;
+          let scrollTop;
+          scrollArea.addEventListener("mousedown", (e) => {
+            isDown = true;
+            scrollArea.style.cursor = "grabbing";
+            startY = e.pageY - scrollArea.offsetTop;
+            scrollTop = scrollArea.scrollTop;
+          });
+          scrollArea.addEventListener("mouseleave", () => {
+            isDown = false;
+            scrollArea.style.cursor = "";
+          });
+          scrollArea.addEventListener("mouseup", () => {
+            isDown = false;
+            scrollArea.style.cursor = "";
+          });
+          scrollArea.addEventListener("mousemove", (e) => {
+            if (!isDown) return;
+            e.preventDefault();
+            const y = e.pageY - scrollArea.offsetTop;
+            const walk = (y - startY) * 2;
+            scrollArea.scrollTop = scrollTop - walk;
+          });
+
+          gridWrapper.className =
+            "grid grid-cols-3 gap-1 content-start w-full relative z-10 px-1 pt-2";
+          scrollArea.appendChild(gridWrapper);
+
+          this.state.videos.forEach((video, index) => {
+            const el = document.createElement("div");
+            const isActive = index === this.state.currentIndex;
+            el.setAttribute("tabindex", "0");
+            el.setAttribute("data-index", index);
+            el.className = `focusable-item aspect-[3/4] relative cursor-pointer overflow-hidden rounded-sm active:scale-95 transition-transform ${isActive ? "border-2 border-primary box-border" : "bg-gray-800"}`;
+            el.onclick = () => {
+              this.state.currentIndex = index;
+              this.toggleViewMode();
+            };
+
+            const img = document.createElement("img");
+            img.crossOrigin = "anonymous";
+            img.referrerPolicy = "no-referrer";
+            img.src = this.getImageSrc(video);
+            img.className = "w-full h-full object-cover";
+            img.loading = "lazy";
+            img.onerror = () => {
+              img.onerror = null;
+              img.src =
+                'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="1" height="1"%3E%3Crect width="1" height="1" fill="%23333"%2F%3E%3C%2Fsvg%3E';
+            };
+            el.appendChild(img);
+
+            if (video.RunTimeTicks) {
+              const duration = Math.floor(video.RunTimeTicks / 10000000);
+              const mins = Math.floor(duration / 60);
+              const secs = duration % 60;
+              const timeBadge = document.createElement("div");
+              timeBadge.className =
+                "absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded";
+              timeBadge.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
+              el.appendChild(timeBadge);
+            }
+
+            gridWrapper.appendChild(el);
+          });
+
+          // Basic URL: https://v1.hitokoto.cn/
+          const eggFooter = document.createElement("div");
+          eggFooter.className =
+            "col-span-3 pt-8 pb-24 px-4 text-center text-gray-600 text-[11px] leading-relaxed select-none";
+          eggFooter.innerHTML = '<span class="opacity-40">——</span>';
+          gridWrapper.appendChild(eggFooter);
+
+          fetch("https://v1.hitokoto.cn/?encode=json&charset=utf-8")
+            .then((r) => r.json())
+            .then((data) => {
+              const text = data.hitokoto || "";
+              const source = [data.from_who, data.from]
+                .filter(Boolean)
+                .join(" · ");
+              eggFooter.innerHTML = `
+                            <p class="text-gray-300">“${text}”</p>
+                            ${source ? `<p class="mt-1 text-gray-500 italic">- ${source} -</p>` : ""}
+                        `;
+            })
+            .catch(() => {
+              eggFooter.innerHTML = "";
+            });
+
+          const focusVideo = this.state.videos[this.state.currentIndex];
+          if (focusVideo) {
+            this.dom.videoTitle.textContent =
+              focusVideo.Name || "Unknown Video";
+            this.dom.videoDescription.textContent =
+              focusVideo.Overview || "No Description...";
+          }
+
+          // Scroll to active card (direct scrollArea op, avoids scrollIntoView polluting html.scrollTop)
+          requestAnimationFrame(() => {
+            const activeEl = gridWrapper.children[this.state.currentIndex];
+            if (activeEl && scrollArea) {
+              const elTop = activeEl.offsetTop;
+              const elHeight = activeEl.offsetHeight;
+              const areaHeight = scrollArea.clientHeight;
+              scrollArea.scrollTop = elTop - areaHeight / 2 + elHeight / 2;
+            }
+          });
+
+          lucide.createIcons();
+        }
+
+        renderSlides() {
+          this.disconnectFeedObserver();
+          const container = this.dom.videoContainer;
+          container.className =
+            "relative w-full h-full flex flex-col overflow-y-auto overscroll-y-contain snap-y snap-mandatory feed-scrollbar-hidden";
+          container.innerHTML = "";
+          this.feedActivationToken += 1;
+          this.state.isPlaying = false;
+          this.feedActiveIndex = null;
+          this.feedIntersectionRatios.clear();
+
+          const fragment = document.createDocumentFragment();
+          this.state.videos.forEach((video, index) => {
+            fragment.appendChild(this.createFeedItem(video, index));
+          });
+          container.appendChild(fragment);
+
+          this.setupFeedObserver();
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          this.updateUI();
+        }
+
+        createFeedItem(video, index) {
+          const item = document.createElement("article");
+          item.className = "slide-item";
+          item.dataset.index = String(index);
+          item.dataset.id = String(video.Id || "");
+          item.setAttribute("role", "article");
+          item.setAttribute("aria-label", "Video " + (index + 1));
+
+          const posterSrc = this.getImageSrc(video);
+          item.innerHTML =
+            '<div class="w-full h-full relative bg-black">' +
+            '<img id="thumb-' + index + '" class="absolute inset-0 w-full h-full object-cover z-0 ' +
+            (this.state.isScaleFill ? "" : "opacity-0") +
+            '" alt="" loading="lazy" />' +
+            '<div id="poster-' + index + '" data-feed-poster="true" class="absolute inset-0 bg-cover bg-center scale-[1.15] blur-xl transition-opacity duration-300 z-0 ' +
+            (this.state.isScaleFill ? "opacity-0" : "opacity-70") +
+            '"></div>' +
+            '<div id="overlay-' + index + '" class="absolute inset-0 bg-black/40 transition-opacity duration-300 z-0 ' +
+            (this.state.isScaleFill ? "opacity-0" : "opacity-100") +
+            '"></div>' +
+            '<video id="video-p' + index + '" data-index="' + index +
+            '" class="video-fullscreen ' +
+            (this.state.isScaleFill ? "object-cover" : "object-contain") +
+            ' opacity-0 transition-opacity duration-500 z-10" playsinline webkit-playsinline muted preload="metadata"></video>' +
+            '<div class="touch-layer absolute inset-0 z-20" style="-webkit-touch-callout: none;"></div>' +
+            '<div id="playBtn-' + index + '" class="play-pause-btn">' +
+            '<i data-lucide="play" class="stroke-white w-8 h-8"></i></div></div>';
+
+          const thumb = item.querySelector("img");
+          thumb.dataset.posterSrc = posterSrc;
+          thumb.onerror = () => {
+            if (thumb.dataset.fallback !== "true") {
+              thumb.dataset.fallback = "true";
+              thumb.src = this.getImageSrc(null);
+            }
+          };
+          const poster = item.querySelector("[data-feed-poster]");
+          if (poster) poster.dataset.posterSrc = posterSrc;
+          return item;
+        }
+
+        updateFeedPosterLoading(centerIndex = this.state.currentIndex) {
+          if (this.state.viewMode !== "stream") return;
+          const keepIndexes = new Set(
+            [
+              centerIndex - 2,
+              centerIndex - 1,
+              centerIndex,
+              centerIndex + 1,
+              centerIndex + 2,
+            ].filter((index) => index >= 0 && index < this.state.videos.length),
+          );
+          this.dom.videoContainer
+            .querySelectorAll(".slide-item")
+            .forEach((item) => {
+              const index = Number(item.dataset.index);
+              const thumb = item.querySelector("img");
+              const poster = item.querySelector("[data-feed-poster]");
+              if (!thumb || !poster) return;
+              const posterSrc = thumb.dataset.posterSrc;
+              if (!posterSrc) return;
+
+              if (keepIndexes.has(index)) {
+                if (!thumb.getAttribute("src")) {
+                  thumb.dataset.fallback = "false";
+                  thumb.src = posterSrc;
+                }
+                if (!poster.style.backgroundImage)
+                  poster.style.backgroundImage = "url('" + posterSrc + "')";
+              } else {
+                thumb.removeAttribute("src");
+                thumb.dataset.fallback = "false";
+                poster.style.backgroundImage = "";
+              }
+            });
+        }
+
+        appendFeedItems(videos, startIndex) {
+          if (this.state.viewMode !== "stream") return;
+          const fragment = document.createDocumentFragment();
+          videos.forEach((video, offset) => {
+            fragment.appendChild(this.createFeedItem(video, startIndex + offset));
+          });
+          this.dom.videoContainer.appendChild(fragment);
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          if (this.feedObserver) {
+            this.dom.videoContainer
+              .querySelectorAll(".slide-item")
+              .forEach((item) => {
+                if (!item.dataset.observed) {
+                  this.feedObserver.observe(item);
+                  item.dataset.observed = "true";
+                }
+              });
+          }
+          lucide.createIcons();
+        }
+
+        getFeedItem(index) {
+          return this.dom.videoContainer?.querySelector(
+            '[data-index="' + index + '"]',
+          );
+        }
+
+        getVideoElement(index = this.state.currentIndex) {
+          return this.getFeedItem(index)?.querySelector("video") || null;
+        }
+
+        getPlayButton(index = this.state.currentIndex) {
+          return document.getElementById("playBtn-" + index);
+        }
+
+        setFeedItemIndex(item, index) {
+          item.dataset.index = String(index);
+          item.setAttribute("aria-label", "Video " + (index + 1));
+          ["thumb-", "poster-", "overlay-", "video-p", "playBtn-"].forEach(
+            (prefix) => {
+              const element = item.querySelector("[id^='" + prefix + "']");
+              if (element) element.id = prefix + index;
+            },
+          );
+        }
+
+        syncFeedItemsToState() {
+          if (this.state.viewMode !== "stream") return;
+          const currentItems = [
+            ...this.dom.videoContainer.querySelectorAll(".slide-item"),
+          ];
+          if (!currentItems.length) return;
+          const byId = new Map(
+            currentItems.map((item) => [String(item.dataset.id), item]),
+          );
+          const fragment = document.createDocumentFragment();
+          this.state.videos.forEach((video, index) => {
+            const item =
+              byId.get(String(video.Id)) || this.createFeedItem(video, index);
+            this.setFeedItemIndex(item, index);
+            item.dataset.id = String(video.Id || "");
+            fragment.appendChild(item);
+          });
+          this.dom.videoContainer.appendChild(fragment);
+          this.setupFeedObserver();
+          this.updateFeedPosterLoading(this.state.currentIndex);
+          this.updateUI();
+        }
+
+        disconnectFeedObserver() {
+          this.feedObserver?.disconnect();
+          this.feedObserver = null;
+          this.feedIntersectionRatios.clear();
+          if (this._feedScrollHandler) {
+            this.dom.videoContainer.removeEventListener(
+              "scroll",
+              this._feedScrollHandler,
+            );
+            this._feedScrollHandler = null;
+          }
+        }
+
+        setupFeedObserver() {
+          this.disconnectFeedObserver();
+          const container = this.dom.videoContainer;
+          const updateActiveFromRatios = () => {
+            let bestIndex = null;
+            let bestRatio = this.feedObserverThreshold;
+            this.feedIntersectionRatios.forEach((ratio, index) => {
+              if (ratio >= bestRatio && (bestIndex === null || ratio > bestRatio)) {
+                bestIndex = index;
+                bestRatio = ratio;
+              }
+            });
+
+            if (bestIndex === null) {
+              if (this.feedActiveIndex !== null) {
+                this.feedActivationToken += 1;
+                this.deactivateFeedItem(this.feedActiveIndex);
+                this.feedActiveIndex = null;
+                this.state.isPlaying = false;
+              }
+              return;
+            }
+            if (this.feedActiveIndex !== bestIndex)
+              this.activateFeedItem(bestIndex);
+          };
+
+          if ("IntersectionObserver" in window) {
+            this.feedObserver = new IntersectionObserver(
+              (entries) => {
+                entries.forEach((entry) => {
+                  const index = Number(entry.target.dataset.index);
+                  if (Number.isNaN(index)) return;
+                  const ratio = entry.intersectionRatio || 0;
+                  if (
+                    entry.isIntersecting &&
+                    ratio >= this.feedObserverThreshold
+                  )
+                    this.feedIntersectionRatios.set(index, ratio);
+                  else this.feedIntersectionRatios.delete(index);
+                });
+                updateActiveFromRatios();
+              },
+              {
+                root: container,
+                threshold: [0, this.feedObserverThreshold],
+              },
+            );
+            container
+              .querySelectorAll(".slide-item")
+              .forEach((item) => {
+                this.feedObserver.observe(item);
+                item.dataset.observed = "true";
+              });
+          } else {
+            this._feedScrollHandler = () => {
+              if (this._feedScrollFrame) return;
+              this._feedScrollFrame = requestAnimationFrame(() => {
+                this._feedScrollFrame = null;
+                const root = container.getBoundingClientRect();
+                this.feedIntersectionRatios.clear();
+                container.querySelectorAll(".slide-item").forEach((item) => {
+                  const rect = item.getBoundingClientRect();
+                  const visible = Math.max(
+                    0,
+                    Math.min(rect.bottom, root.bottom) -
+                      Math.max(rect.top, root.top),
+                  );
+                  const ratio = rect.height ? visible / rect.height : 0;
+                  if (ratio >= this.feedObserverThreshold)
+                    this.feedIntersectionRatios.set(
+                      Number(item.dataset.index),
+                      ratio,
+                    );
+                });
+                updateActiveFromRatios();
+              });
+            };
+            container.addEventListener("scroll", this._feedScrollHandler, {
+              passive: true,
+            });
+          }
+
+          requestAnimationFrame(() => {
+            if (this.state.viewMode === "stream") {
+              const current = this.getFeedItem(this.state.currentIndex);
+              current?.scrollIntoView({ behavior: "auto", block: "start" });
+              if (!this.feedObserver) this._feedScrollHandler?.();
+            }
+          });
+        }
+
+        async activateFeedItem(index) {
+          if (
+            this.state.viewMode !== "stream" ||
+            index < 0 ||
+            index >= this.state.videos.length
+          )
+            return;
+
+          const item = this.state.videos[index];
+          const previousIndex = this.feedActiveIndex;
+          if (previousIndex !== null && previousIndex !== index) {
+            const previousVideo = this.getVideoElement(previousIndex);
+            if (previousVideo) {
+              this.reportPlayback("stopped", previousVideo);
+              this.deactivateFeedItem(previousIndex);
+            }
+          }
+          this.feedActiveIndex = index;
+          this.state.currentIndex = index;
+          this.updateFeedPosterLoading(index);
+          this.state.playSessionId = "ex_" + Date.now().toString(16);
+          this.state.isPlaying = false;
+          this.updateUI();
+          this.updateTagButton(item);
+
+          document
+            .querySelectorAll("#videoContainer .slide-item video")
+            .forEach((video) => {
+              const videoIndex = Number(video.dataset.index);
+              if (videoIndex !== index) this.releaseVideoElement(video);
+            });
+
+          const activationToken = ++this.feedActivationToken;
+          const generation = await this.syncPlaybackSession(index);
+          if (
+            generation === false ||
+            activationToken !== this.feedActivationToken ||
+            this.feedActiveIndex !== index ||
+            this.state.viewMode !== "stream"
+          )
+            return;
+
+          const video = this.getVideoElement(index);
+          if (!video) return;
+          const src = this.getVideoSrc(item.Id, item);
+          if (video.dataset.mediaSrc !== src) {
+            video.dataset.mediaSrc = src;
+            video.src = src;
+            video.load();
+          }
+          video.muted = this.state.isMuted;
+          this.bindActiveVideo(video, index, item);
+          this.playVideo(index);
+        }
+
+        bindActiveVideo(video, index, item) {
+          video.onwaiting = () => {
+            clearTimeout(this._waitingTimer);
+            this._waitingTimer = setTimeout(
+              () => this.toggleLoading(true),
+              300,
+            );
+          };
+          video.onplaying = () => {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+            this.reportPlayback("playing", video);
+          };
+          video.oncanplay = () => {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+          };
+          if (video.readyState >= 3) {
+            clearTimeout(this._waitingTimer);
+            this.toggleLoading(false);
+            video.style.opacity = "1";
+          }
+          video.ontimeupdate = () => {
+            if (video.duration) {
+              const pct = (video.currentTime / video.duration) * 100;
+              this.dom.progressLine.style.width = pct + "%";
+              this.dom.currentTime.textContent = this.formatTime(video.currentTime);
+              this.dom.totalTime.textContent = this.formatTime(video.duration);
+              this.reportPlayback("progress", video);
+            }
+          };
+          video.onpause = () => this.reportPlayback("progress", video);
+          video.onended = () => {
+            this.reportPlayback("stopped", video);
+            if (this.state.viewMode === "stream" && this.state.isAutoplay)
+              this.nextVideo();
+          };
+          video.onerror = () => {
+            if (this.feedActiveIndex !== index) return;
+            console.warn("Video playback failed, handling downgrade retry logic");
+            this.toggleLoading(false);
+            this.retryWithAltMode(index, item);
+          };
+          video.dataset.retryCount = "0";
+        }
+
+        deactivateFeedItem(index) {
+          const video = this.getVideoElement(index);
+          if (!video) return;
+          this.releaseVideoElement(video);
+          const button = this.getPlayButton(index);
+          button?.classList.remove("paused");
+        }
+
+        releaseVideoElement(video) {
+          if (!video) return;
+          video.pause();
+          video.onerror = null;
+          video.onwaiting = null;
+          video.onplaying = null;
+          video.oncanplay = null;
+          video.ontimeupdate = null;
+          video.onpause = null;
+          video.onended = null;
+          video.style.opacity = "0";
+          video.removeAttribute("src");
+          video.removeAttribute("data-media-src");
+          video.load();
+          video.muted = true;
+        }
+
+        async syncPlaybackSession(index) {
+          const current = this.state.videos[index];
+          if (!current) return false;
+          const generation = ++this.state.playbackGeneration;
+          try {
+            const response = await fetch("/api/playback/session", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: this.config.playbackControlId,
+                generation,
+                currentId: current.Id,
+              }),
+            });
+            if (generation !== this.state.playbackGeneration) return false;
+            if (!response.ok)
+              throw new Error("Playback session sync failed: " + response.status);
+            return generation;
+          } catch (error) {
+            console.error(error);
+            this.showToast("Could not establish playback session");
+            return false;
+          }
+        }
+
+        playbackControlParams() {
+          return [
+            "PlaybackControlId=" +
+              encodeURIComponent(this.config.playbackControlId),
+            "PlaybackGeneration=" + this.state.playbackGeneration,
+          ];
+        }
+
+        armAutoplayUnlock() {
+          if (window._videosUnlocked) return;
+          const unlock = () => {
+            window._videosUnlocked = true;
+            document.removeEventListener("touchstart", unlock, true);
+            document.removeEventListener("click", unlock, true);
+            this.playVideo(this.state.currentIndex);
+          };
+          document.addEventListener("touchstart", unlock, {
+            once: true,
+            capture: true,
+          });
+          document.addEventListener("click", unlock, {
+            once: true,
+            capture: true,
+          });
+        }
+
+        playVideo(index) {
+          if (
+            this.state.viewMode !== "stream" ||
+            index !== this.state.currentIndex ||
+            this.feedActiveIndex !== index
+          )
+            return;
+          const video = this.getVideoElement(index);
+          const button = this.getPlayButton(index);
+          if (!video) return;
+          const playPromise = video.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                if (this.feedActiveIndex !== index) return;
+                this.state.isPlaying = true;
+                button?.classList.remove("paused");
+              })
+              .catch((error) => {
+                this.state.isPlaying = false;
+                this.toggleLoading(false);
+                button?.classList.add("paused");
+                if (error.name === "NotAllowedError") {
+                  this.armAutoplayUnlock();
+                  this.showToast("Browser restricted autoplay. Tap to play.");
+                  const app = document.getElementById("app");
+                  if (app.classList.contains("interface-hidden")) {
+                    app.classList.remove("interface-hidden");
+                    this.showInterfaceTemp();
+                  }
+                }
+              });
+          }
+        }
+
+        retryWithAltMode(index, item) {
+          const v = this.getVideoElement();
+          if (!v) return;
+
+          const retryCount = parseInt(v.dataset.retryCount || "0");
+          const isIOS =
+            /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+          v.dataset.retryCount = String(retryCount + 1);
+
+          if (this.config.useStatic) {
+            // -- Direct Play fallback chain --
+            if (isIOS) {
+              // iOS fallback: Direct Play → Direct Stream → HLS Transcode
+              if (retryCount === 0) {
+                // Step 1: Direct Stream (remux only, fastest, no re-encode)
+                // Declare HEVC support to prevent Emby from transcoding during remux
+                const { server, token } = this.config;
+                const deviceId = this.config.deviceId || "ShuffleBox-Device";
+                this.showToast("iOS Direct Stream...");
+                const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AudioCodec=aac,mp3,ac3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+                v.src = `${server}/emby/Videos/${item.Id}/stream.mp4?${params}`;
+                v.load();
+                this.playVideo(index);
+              } else if (retryCount === 1) {
+                // Step 2: HLS Transcode (ultimate fallback)
+                this.showToast("iOS Transcode...");
+                v.src = this._buildHlsSrc(item.Id, item);
+                v.load();
+                this.playVideo(index);
+              } else {
+                this.toggleLoading(false);
+                this.showToast("Playback failed. Check Emby settings.");
+              }
+            } else {
+              // Non-iOS fallback: Direct Play → Direct Stream
+              if (retryCount === 0) {
+                const { server, token } = this.config;
+                const deviceId = this.config.deviceId || "ShuffleBox-Device";
+                this.showToast("Trying Direct Stream...");
+                const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+                v.src = `${server}/emby/Videos/${item.Id}/stream.mp4?${params}`;
+                v.load();
+                this.playVideo(index);
+              } else if (retryCount === 1) {
+                this.showToast("Trying compatible transcoding...");
+                v.src = this._buildHlsSrc(item.Id, item);
+                v.load();
+                this.playVideo(index);
+              } else {
+                this.toggleLoading(false);
+                this.showToast("Playback failed. Check the video codec.");
+              }
+            }
+          } else {
+            // -- Transcode mode (HLS) failed, no further fallback --
+            this.toggleLoading(false);
+            this.showToast("Transcode failed. Check Emby settings.");
+          }
+        }
+
+        // -- Universal HLS URL builder (all platforms) --
+        // MediaSourceId and PlaySessionId are required by Emby transcode API; missing them causes 500
+        // To adjust bitrate cap, modify VideoBitrate below (unit: bps, default 20Mbps)
+        //
+        // [Smart Transcode Strategy]
+        // VideoCodec=h264 (declare only h264 support):
+        //   → Source is h264? Allow stream copy (remux into HLS segments, no re-encode) → efficient
+        //   → Source is hevc/av1? Emby detects incompatibility, transcodes to h264 → hardware accel
+        // AllowVideoStreamCopy=true:
+        //   Allows h264 sources to remux directly; prevents wasteful h264→h264 re-encoding
+        // Note: EnableAutoStreamCopy is NOT added — it can bypass HLS segmentation entirely
+        _buildHlsSrc(id, mediaItem) {
+          const { server, token } = this.config;
+          const mediaSourceId = mediaItem?.MediaSources?.[0]?.Id || "";
+          const playSessionId =
+            this.state.playSessionId || "hls_" + id + "_" + Date.now();
+          const deviceId = this.config.deviceId || "ShuffleBox-Device";
+
+          const params = [
+            `api_key=${token}`,
+            mediaSourceId ? `MediaSourceId=${mediaSourceId}` : "",
+            `DeviceId=${deviceId}`,
+            `PlaySessionId=${playSessionId}`,
+            `VideoCodec=h264`, // h264 only: hevc/av1/etc. forced to transcode
+            `AudioCodec=aac,mp3,ac3`,
+            `VideoBitrate=20000000`,
+            `AudioBitrate=320000`,
+            `TranscodingMaxAudioChannels=2`,
+            `SegmentContainer=ts`, // Use ts: fixes h264 source playback failure with mp4 HLS segments
+            `MinSegments=1`,
+            `BreakOnNonKeyFrames=True`,
+            `AllowVideoStreamCopy=true`, // h264 source: remux, no re-encode (saves GPU/CPU)
+            `AllowAudioStreamCopy=true`, // aac audio: copy; other formats: transcode to aac
+            ...this.playbackControlParams(),
+            // EnableAutoStreamCopy NOT added — avoids Emby bypassing HLS segmentation
+          ]
+            .filter(Boolean)
+            .join("&");
+
+          return `${server}/emby/Videos/${id}/master.m3u8?${params}`;
+        }
+
+        togglePlay() {
+          const v = this.getVideoElement();
+          const btn = this.getPlayButton();
+          if (!v) return;
+
+          if (v.paused) {
+            v.play();
+            this.state.isPlaying = true;
+            if (btn) btn.classList.remove("paused");
+          } else {
+            v.pause();
+            this.state.isPlaying = false;
+            if (btn) btn.classList.add("paused");
+          }
+        }
+
+        prevVideo() {
+          if (this.state.currentIndex === 0) {
+            return;
+          }
+          this.switchSlide(this.state.currentIndex - 1, "down");
+        }
+
+        switchSlide(newIndex) {
+          if (
+            this.state.viewMode !== "stream" ||
+            newIndex < 0 ||
+            newIndex >= this.state.videos.length
+          )
+            return;
+
+          const target = this.getFeedItem(newIndex);
+          if (!target) return;
+          if (
+            newIndex >= this.state.videos.length - 5 &&
+            this.state.videos.length < (this.state.totalCount || 999999)
+          ) {
+            if (!this._fetchingAppend) {
+              this._fetchingAppend = true;
+              this.fetchVideos(
+                null,
+                null,
+                false,
+                this.state.playMode === "random",
+                true,
+              ).finally(() => {
+                this._fetchingAppend = false;
+              });
+            }
+          }
+          this.dom.videoContainer.scrollTo({
+            top: target.offsetTop,
+            behavior: "smooth",
+          });
+          this.updateFeedPosterLoading(newIndex);
+        }
+
+
+        reportPlayback(event, videoEl) {
+          if (
+            !this.config.server ||
+            !this.config.token ||
+            this.state.videos.length === 0
+          )
+            return;
+
+          const now = Date.now();
+          if (
+            event === "progress" &&
+            now - (this.state.lastReportTime || 0) < 5000
+          )
+            return;
+          if (event === "progress") this.state.lastReportTime = now;
+
+          const videoData = this.state.videos[this.state.currentIndex];
+          if (!videoData || !videoEl) return;
+
+          // Emby Fix: 1. Map standard names 2. Add MediaSourceId 3. Report Capabilities
+          const eventMap = {
+            playing: "TimeUpdate",
+            progress: "TimeUpdate",
+            stopped: "Stopped",
+          };
+          const eventName = videoEl.paused
+            ? "Pause"
+            : eventMap[event] || "TimeUpdate";
+          const mediaSourceId = videoData.MediaSources?.[0]?.Id || "";
+
+          if (event === "playing") {
+            this.reportCapabilities();
+          }
+
+          const ticks = Math.floor(videoEl.currentTime * 10000000);
+
+          let endpoint = "/Sessions/Playing";
+          if (event === "progress") endpoint = "/Sessions/Playing/Progress";
+          if (event === "stopped") endpoint = "/Sessions/Playing/Stopped";
+
+          const payload = {
+            ItemId: videoData.Id,
+            PositionTicks: ticks,
+            IsPaused: videoEl.paused || event === "stopped",
+            IsMuted: videoEl.muted,
+            VolumeLevel: Math.floor(videoEl.volume * 100),
+            PlayMethod: this.config.useStatic ? "DirectPlay" : "Transcode",
+            EventName: eventName,
+            CanSeek: true,
+            PlaySessionId: this.state.playSessionId,
+            QueueableMediaTypes: ["Video"],
+          };
+          if (mediaSourceId) payload.MediaSourceId = mediaSourceId;
+
+          fetch(
+            `${this.config.server}/emby${endpoint}?api_key=${this.config.token}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+              },
+              body: JSON.stringify(payload),
+            },
+          ).catch(() => {});
+        }
+
+        reportCapabilities() {
+          const { server, token } = this.config;
+          if (!server || !token) return;
+          fetch(`${server}/emby/Sessions/Capabilities/Full?api_key=${token}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+            },
+            body: JSON.stringify({
+              PlayableMediaTypes: ["Video"],
+              SupportsMediaControl: true,
+              SupportsPersistentConnections: false,
+            }),
+          }).catch(() => {});
+        }
+
+        getVideoSrc(id, mediaItem) {
+          const { server, token, useStatic } = this.config;
+
+          // Get metadata (codec and container)
+          const mediaSource = mediaItem?.MediaSources?.[0];
+          const codec = (mediaSource?.VideoCodec || "").toLowerCase();
+          const container = (mediaSource?.Container || "").toLowerCase();
+          const codecTag = (mediaSource?.VideoCodecTag || "").toLowerCase(); // Get tag like hev1/hvc1
+
+          // Smart Decision: For h264+mp4, always prioritize direct play
+          const isNativeCompatible =
+            codec === "h264" &&
+            (container.includes("mp4") || container.includes("m4v"));
+
+          if (!useStatic && !isNativeCompatible) {
+            // Force HLS only if Direct Play is off AND codec is not h264+mp4
+            return this._buildHlsSrc(id, mediaItem);
+          }
+
+          // -- Device Compatibility Check for Apple hev1 issue --
+          const isIOS =
+            /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+          // Specific bypass for iOS + HEVC + hev1 tag (Safari only natively supports hvc1)
+          // Direct play (Static) for hev1 fails on iOS. Force Direct Stream (Remux) to fix the tag.
+          if (isIOS && codec === "hevc" && codecTag === "hev1") {
+            const deviceId = this.config.deviceId || "ShuffleBox-Device";
+            // Using stream.mp4 with Copy allows Emby to Remux (hev1 -> hvc1) without transcoding.
+            const params = `api_key=${token}&DeviceId=${deviceId}&VideoCodec=h264,hevc,hevc,av1&AudioCodec=aac,mp3,ac3&AllowVideoStreamCopy=true&AllowAudioStreamCopy=true&${this.playbackControlParams().join("&")}`;
+            return `${server}/emby/Videos/${id}/stream.mp4?${params}`;
+          }
+
+          // -- Direct Play (Static) --
+          const playSessionId =
+            this.state.playSessionId || "ex_" + Date.now().toString(16);
+          const deviceId = this.config.deviceId || "ShuffleBox-Device";
+          const msId = mediaSource?.Id || "";
+
+          const params = [
+            `api_key=${token}`,
+            `Static=true`,
+            msId ? `MediaSourceId=${msId}` : "",
+            `DeviceId=${deviceId}`,
+            `PlaySessionId=${playSessionId}`,
+            ...this.playbackControlParams(),
+          ]
+            .filter(Boolean)
+            .join("&");
+
+          return `${server}/emby/Videos/${id}/stream?${params}`;
+        }
+
+        getImageSrc(video) {
+          const { server, token } = this.config;
+          const fallbackUrl = "./poster.webp";
+
+          if (typeof video === "object" && video !== null) {
+            if (video.ImageTags && video.ImageTags.Primary) {
+              return `${server}/emby/Items/${video.Id}/Images/Primary?api_key=${token}`;
+            }
+            return fallbackUrl;
+          }
+
+          if (!video) return fallbackUrl;
+          return `${server}/emby/Items/${video}/Images/Primary?api_key=${token}`;
+        }
+
+        async showLibraries() {
+          this.toggleLoading(true);
+          const list = document.getElementById("librariesList");
+          list.innerHTML = "";
+
+          try {
+            const userId = this.config.userId;
+
+            const playlistsRes = await fetch(
+              `${this.config.server}/emby/Users/${userId}/Items?Recursive=true&IncludeItemTypes=Playlist&api_key=${this.config.token}`,
+              {
+                headers: {
+                  "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+                },
+              },
+            );
+            const playlistsData = await playlistsRes.json();
+
+            const viewsRes = await fetch(
+              `${this.config.server}/emby/Users/${userId}/Views?api_key=${this.config.token}`,
+              {
+                headers: {
+                  "X-Emby-Authorization": `Emby Client="ShuffleBox", Device="${this.config.deviceName}", DeviceId="${this.config.deviceId}", Version="${this.config.appVersion}"`,
+                },
+              },
+            );
+            const viewsDataRaw = viewsRes.ok
+              ? await viewsRes.json()
+              : { Items: [] };
+
+            localStorage.setItem(
+              "shufflebox_views_cache",
+              JSON.stringify({ playlists: playlistsData, views: viewsDataRaw }),
+            );
+
+            const filteredViews = viewsDataRaw.Items
+              ? viewsDataRaw.Items.filter(
+                  (item) =>
+                    item.CollectionType !== "playlists" &&
+                    item.CollectionType !== "boxsets",
+                )
+              : [];
+
+            const favDiv = document.createElement("div");
+            const isFavSelected = this.state.currentLibraryId === "favorites";
+            favDiv.setAttribute("tabindex", "0");
+            favDiv.className = `focusable-item col-span-1 p-2.5 rounded cursor-pointer text-sm flex items-center gap-2 ${isFavSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+            favDiv.innerHTML = `<i data-lucide="folder-heart" class="w-4 h-4"></i><span class="flex-1 truncate">Favorites</span>${isFavSelected ? '<i data-lucide="check" class="w-3.5 h-3.5"></i>' : ""}`;
+            favDiv.onclick = async () => {
+              this.state.currentLibraryId = "favorites";
+              this.state.currentTab = "favorites";
+              if (this.state.favorites.size === 0) {
+                this.showToast("No favorites");
+                return;
+              }
+              this.state.currentLibraryType = "favorites";
+              try { await this.saveMediaPreferences(); } catch (error) { this.showToast("Could not save media source settings"); return; }
+              this.fetchVideos(null, null, false, this.state.playMode === "random");
+              this.toggleModal("libraryModal", false);
+            };
+            list.appendChild(favDiv);
+
+            if (
+              playlistsData &&
+              playlistsData.Items &&
+              playlistsData.Items.length > 0
+            ) {
+              const headerPl = document.createElement("div");
+              headerPl.className =
+                "col-span-2 text-xs text-gray-500 mt-2 mb-1 pl-1";
+              headerPl.textContent = "Playlists";
+              list.appendChild(headerPl);
+
+              playlistsData.Items.forEach((pl) => {
+                const div = document.createElement("div");
+                const isSelected = pl.Id === this.state.currentLibraryId;
+                div.setAttribute("tabindex", "0");
+                div.className = `focusable-item col-span-1 p-2.5 rounded cursor-pointer text-sm flex items-center gap-2 ${isSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+                div.innerHTML = `<i data-lucide="list-video" class="w-4 h-4 flex-shrink-0"></i><span class="flex-1 truncate">${pl.Name}</span>${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 flex-shrink-0"></i>' : ""}`;
+                div.onclick = async () => {
+                  this.state.currentLibraryId = pl.Id;
+                  this.state.currentLibraryType = "playlist";
+                  try { await this.saveMediaPreferences(); } catch (error) { this.showToast("Could not save media source settings"); return; }
+                  this.state.currentTab = "home";
+                  this.updateTabHighlight();
+                  this.fetchVideos(pl.Id, null, false, this.state.playMode === "random");
+                  this.toggleModal("libraryModal", false);
+                };
+                list.appendChild(div);
+              });
+            }
+
+            if (filteredViews && filteredViews.length > 0) {
+              const headerLib = document.createElement("div");
+              headerLib.className =
+                "col-span-2 text-xs text-gray-500 mt-2 mb-1 pl-1";
+              headerLib.textContent = "Libraries";
+              list.appendChild(headerLib);
+
+              filteredViews.forEach((lib) => {
+                const div = document.createElement("div");
+                const isSelected = lib.Id === this.state.currentLibraryId;
+                let iconName = "clapperboard";
+                if (lib.CollectionType === "tvshows") iconName = "tv";
+                else if (lib.CollectionType === "homevideos")
+                  iconName = "video";
+                else if (lib.CollectionType === "musicvideos")
+                  iconName = "cassette-tape";
+                else if (lib.CollectionType === "boxsets") iconName = "archive";
+
+                div.setAttribute("tabindex", "0");
+                div.className = `focusable-item col-span-1 p-2.5 rounded cursor-pointer text-sm flex items-center gap-2 ${isSelected ? "bg-primary/20 text-primary font-bold border border-primary/50" : "bg-white/10 text-gray-300 hover:bg-white/20"}`;
+                div.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span class="flex-1 truncate">${lib.Name}</span>${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 flex-shrink-0"></i>' : ""}`;
+                div.onclick = async () => {
+                  this.state.currentLibraryId = lib.Id;
+                  this.state.currentLibraryType = "library";
+                  try { await this.saveMediaPreferences(); } catch (error) { this.showToast("Could not save media source settings"); return; }
+                  this.state.currentTab = "home";
+                  this.updateTabHighlight();
+                  this.fetchVideos(lib.Id, null, false, this.state.playMode === "random");
+                  this.toggleModal("libraryModal", false);
+                };
+                list.appendChild(div);
+              });
+            }
+
+            lucide.createIcons();
+            this.toggleModal("libraryModal", true);
+          } catch (e) {
+            console.error("Failed to fetch Libraries:", e);
+            this.showToast("Failed to fetch Libraries");
+
+            const favDiv = document.createElement("div");
+            favDiv.className =
+              "p-3 rounded mb-2 cursor-pointer text-sm flex items-center gap-3 bg-gray-800 text-white";
+            favDiv.innerHTML = `<i data-lucide="folder-heart" class="w-5 h-5"></i><span class="flex-1">Favorites</span>`;
+            favDiv.onclick = () => {
+              if (this.state.favorites.size === 0) {
+                this.showToast("No favorites");
+                return;
+              }
+              this.state.currentLibraryId = "favorites";
+              this.state.currentLibraryType = "favorites";
+              this.fetchVideos(null, null, false, this.state.playMode === "random");
+              this.toggleModal("libraryModal", false);
+            };
+            list.appendChild(favDiv);
+
+            lucide.createIcons();
+            this.toggleModal("libraryModal", true);
+          } finally {
+            this.toggleLoading(false);
+          }
+        }
+
+        async toggleFavorite() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+          const id = String(item.Id);
+          if (!item.UserData) item.UserData = {};
+          const isFav = item.UserData.IsFavorite === true;
+          const { server, token, userId } = this.config;
+
+          item.UserData.IsFavorite = !isFav;
+          if (!isFav) {
+            this.state.favorites.add(id);
+            this.showToast("❤️ Favorited");
+          } else {
+            this.state.favorites.delete(id);
+            this.showToast("Removed favorite");
+          }
+          this.updateUI();
+
+          if (server && token && userId) {
+            try {
+              const method = isFav ? "DELETE" : "POST";
+              const res = await fetch(
+                `${server}/emby/Users/${userId}/FavoriteItems/${id}?api_key=${token}`,
+                { method },
+              );
+              if (!res.ok) {
+                item.UserData.IsFavorite = isFav;
+                if (isFav) this.state.favorites.add(id);
+                else this.state.favorites.delete(id);
+                this.updateUI();
+                this.showToast("Action failed, try again");
+              }
+            } catch (e) {
+              console.error("Favorite sync failed:", e);
+            }
+          }
+        }
+
+        updateUI() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (item) {
+            this.dom.videoTitle.textContent = item.Name;
+            this.dom.videoDescription.textContent =
+              item.Overview || "No Description";
+
+            const favBtn = document.getElementById("favoriteBtn");
+            const isFav = item.UserData?.IsFavorite === true;
+            favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="${isFav ? "text-secondary fill-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons({ nameAttr: "data-lucide", nodes: [favBtn] });
+          }
+        }
+
+        updateTabHighlight() {
+          [
+            this.dom.myBtn,
+            this.dom.libraryBtn,
+            this.dom.playModeBtn,
+            this.dom.viewModeBtn,
+          ].forEach((btn) => {
+            if (btn) {
+              btn.classList.add("text-gray-400");
+              btn.classList.remove("text-white");
+            }
+          });
+        }
+
+        toggleAutoplay() {
+          const app = document.getElementById("app");
+          if (app.classList.contains("interface-hidden")) {
+            app.classList.remove("interface-hidden");
+          } else {
+            app.classList.add("interface-hidden");
+          }
+        }
+
+        toggleDeleteMode() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          this.dom.deleteFileName.textContent =
+            "Confirm delete " + (item.Name || "this video") + "?";
+          this.toggleModal("deleteConfirmModal", true);
+          lucide.createIcons();
+        }
+
+        async executeDelete() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          try {
+            // Note: Emby DELETE API requires admin account; regular users get 403
+            // Must check res.ok, otherwise 403/404 are silently treated as success
+            const res = await fetch(
+              `${this.config.server}/emby/Items/${item.Id}?api_key=${this.config.token}`,
+              {
+                method: "DELETE",
+              },
+            );
+
+            if (!res.ok) {
+              if (res.status === 403) {
+                this.showToast("❌ No permission. Use an admin account");
+                this.toggleModal("deleteConfirmModal", false);
+                return;
+              }
+              if (res.status !== 404) {
+                this.showToast(`❌ Delete failed (${res.status})`);
+                this.toggleModal("deleteConfirmModal", false);
+                return;
+              }
+              // 404 means already deleted — still remove from list
+            }
+
+            this.showToast("✅ Deleted");
+            this.state.videos.splice(this.state.currentIndex, 1);
+            this.toggleModal("deleteConfirmModal", false);
+
+            if (this.state.viewMode === "grid") {
+              this.renderGridView();
+            } else {
+              if (this.state.currentIndex >= this.state.videos.length) {
+                this.state.currentIndex = Math.max(
+                  0,
+                  this.state.videos.length - 1,
+                );
+              }
+              this.renderSlides();
+            }
+          } catch (e) {
+            this.showToast("❌ Delete failed: network error");
+            this.toggleModal("deleteConfirmModal", false);
+          }
+        }
+
+        showInterfaceTemp() {
+          const app = document.getElementById("app");
+          if (this.csTimer) clearTimeout(this.csTimer);
+
+          if (this.state.viewMode === "grid") return;
+          if (this.isAnyModalOpen()) return;
+
+          if (
+            (document.fullscreenElement ||
+              app.classList.contains("ios-pwa-fullscreen")) &&
+            !app.classList.contains("interface-hidden")
+          ) {
+            this.csTimer = setTimeout(() => {
+              app.classList.add("interface-hidden");
+            }, 5000);
+          }
+        }
+
+        createShuffleSeed() {
+          if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+          if (window.crypto?.getRandomValues) {
+            const values = new Uint32Array(4);
+            window.crypto.getRandomValues(values);
+            return [...values].map((value) => value.toString(16).padStart(8, "0")).join("");
+          }
+          return `${Date.now()}-${performance.now()}-${Math.random()}`;
+        }
+
+        _shuffleAroundCurrent() {
+          const idx = this.state.currentIndex;
+          const cur = this.state.videos[idx];
+          for (let i = this.state.videos.length - 1; i > 0; i--) {
+            const values = new Uint32Array(1);
+            const j = window.crypto?.getRandomValues
+              ? (window.crypto.getRandomValues(values), values[0] % (i + 1))
+              : Math.floor(Math.random() * (i + 1));
+            [this.state.videos[i], this.state.videos[j]] = [
+              this.state.videos[j],
+              this.state.videos[i],
+            ];
+          }
+          const newPos = this.state.videos.findIndex((v) => v.Id === cur.Id);
+          [this.state.videos[newPos], this.state.videos[idx]] = [
+            this.state.videos[idx],
+            this.state.videos[newPos],
+          ];
+        }
+
+        togglePlayMode() {
+          if (this.config.shortDrama) {
+            this.showToast("ℹ️ Sequence play locked in Short Drama mode");
+            return;
+          }
+          const isSeq = this.state.playMode === "sequence";
+          this.state.playMode = isSeq ? "random" : "sequence";
+          localStorage.setItem("shufflebox_play_mode", this.state.playMode);
+
+          const btn = this.dom.playModeBtn;
+          btn.innerHTML = `<i data-lucide="${isSeq ? "shuffle" : "repeat"}" class="stroke-current w-5 h-5"></i>`;
+          lucide.createIcons();
+
+          if (isSeq) {
+            this.state.originalVideos = [...this.state.videos];
+            this._shuffleAroundCurrent();
+            this.syncFeedItemsToState();
+            this.showToast("🔀 Shuffle mode");
+          } else {
+            const curId = this.state.videos[this.state.currentIndex]?.Id;
+            this.state.videos = [...this.state.originalVideos];
+            this.state.originalVideos = [];
+            if (curId) {
+              const origPos = this.state.videos.findIndex(
+                (v) => String(v.Id) === String(curId),
+              );
+              if (origPos >= 0 && origPos !== this.state.currentIndex) {
+                [
+                  this.state.videos[origPos],
+                  this.state.videos[this.state.currentIndex],
+                ] = [
+                  this.state.videos[this.state.currentIndex],
+                  this.state.videos[origPos],
+                ];
+              }
+            }
+            this.syncFeedItemsToState();
+            this.showToast("🔁 Sequence mode");
+          }
+        }
+
+        nextVideo() {
+          const nextIndex = this.state.currentIndex + 1;
+          if (nextIndex >= this.state.videos.length) {
+            this.showToast("You reached the last video");
+            return;
+          }
+          this.switchSlide(nextIndex, "up");
+        }
+
+        toggleViewMode() {
+          const isStream = this.state.viewMode === "stream";
+          this.state.viewMode = isStream ? "grid" : "stream";
+
+          const btn = this.dom.viewModeBtn;
+          btn.innerHTML = `<i data-lucide="${this.state.viewMode === "stream" ? "gallery-vertical" : "layout-grid"}" class="stroke-current w-5 h-5"></i>`;
+
+          lucide.createIcons();
+
+          if (this.state.viewMode === "grid") {
+            const PAGE_SIZE = 20;
+            if (this.state.videos.length > PAGE_SIZE) {
+              const pageIndex = Math.floor(this.state.currentIndex / PAGE_SIZE);
+              const start = pageIndex * PAGE_SIZE;
+              this.state.videos = this.state.videos.slice(
+                start,
+                start + PAGE_SIZE,
+              );
+              this.state.currentIndex = this.state.currentIndex % PAGE_SIZE;
+              this.state.startIndex = (this.state.startIndex || 0) + start;
+            }
+
+            const app = document.getElementById("app");
+            if (app) {
+              app.classList.remove("interface-hidden");
+              app.classList.add("grid-active");
+              if (this.csTimer) clearTimeout(this.csTimer);
+            }
+            this.dom.videoContainer.style.touchAction = "auto";
+            this.renderGridView();
+          } else {
+            const app = document.getElementById("app");
+            if (app) app.classList.remove("grid-active");
+            this.dom.videoContainer.style.touchAction = "pan-y";
+            this.renderSlides();
+            this.showInterfaceTemp();
+          }
+        }
+
+        toggleScaleMode() {
+          this.state.isScaleFill = !this.state.isScaleFill;
+          localStorage.setItem("shufflebox_is_scale_fill", this.state.isScaleFill);
+          const videos = document.querySelectorAll(".video-fullscreen");
+          videos.forEach((v, index) => {
+            v.classList.remove("object-cover", "object-contain");
+            v.classList.add(
+              this.state.isScaleFill ? "object-cover" : "object-contain",
+            );
+
+            const thumb = document.getElementById(`thumb-${index}`);
+            const poster = document.getElementById(`poster-${index}`);
+            const overlay = document.getElementById(`overlay-${index}`);
+            if (this.state.isScaleFill) {
+              if (thumb) thumb.style.opacity = "1";
+              if (poster) poster.style.opacity = "0";
+              if (overlay) overlay.style.opacity = "0";
+            } else {
+              if (thumb) thumb.style.opacity = "0";
+              if (poster) poster.style.opacity = "0.7";
+              if (overlay) overlay.style.opacity = "1";
+            }
+          });
+
+          const scaleBtn = this.dom.scaleBtn;
+          if (scaleBtn) scaleBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isScaleFill ? "maximize-2" : "minimize-2"}" class="stroke-white w-6 h-6 drop-shadow-md"></i></div>`;
+          lucide.createIcons();
+        }
+
+        async showMediaInfo() {
+          const item = this.state.videos[this.state.currentIndex];
+          if (!item) return;
+
+          this.dom.mediaInfoModal.classList.remove("hidden");
+          this.showInterfaceTemp();
+          this.dom.mediaInfoContent.innerHTML = `<div class="flex justify-center py-4"><i data-lucide="loader-2" class="w-6 h-6 animate-spin text-gray-500"></i></div>`;
+          lucide.createIcons();
+
+          try {
+            const res = await fetch(
+              `${this.config.server}/emby/Users/${this.config.userId}/Items/${item.Id}?api_key=${this.config.token}&Fields=MediaSources`,
+            );
+            if (!res.ok) throw new Error("API Error");
+            const data = await res.json();
+
+            if (data && data.MediaSources && data.MediaSources.length > 0) {
+              const src = data.MediaSources[0];
+              const c = src.Container || "Unknown";
+              const vStream = src.MediaStreams?.find((s) => s.Type === "Video");
+              const w = vStream?.Width || "?";
+              const h = vStream?.Height || "?";
+              const fps = vStream?.AverageFrameRate
+                ? Math.round(parseFloat(vStream.AverageFrameRate))
+                : "?";
+              const vCodec = vStream?.Codec || "Unknown";
+              const aCodec =
+                src.MediaStreams?.find((s) => s.Type === "Audio")?.Codec ||
+                "Unknown";
+              const bitrate = src.Bitrate
+                ? (src.Bitrate / 1000000).toFixed(2) + " Mbps"
+                : "Unknown";
+              const fileSizeStr = src.Size
+                ? src.Size > 1024 * 1024 * 1024
+                  ? (src.Size / (1024 * 1024 * 1024)).toFixed(1) + " GB"
+                  : (src.Size / (1024 * 1024)).toFixed(1) + " MB"
+                : "Unknown";
+              const transcodeState = this.config.useStatic
+                ? "Direct Play"
+                : "Auto Transcode";
+
+              this.dom.mediaInfoContent.innerHTML = `
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">Resolution</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${w}x${h}@${fps}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">Container</span>
+                                <span class="col-span-2 text-gray-200">${c.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">Video Codec</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${vCodec.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">Audio Codec</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${aCodec.toUpperCase()}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">Total Bitrate</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${bitrate}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center border-b border-gray-700/50">
+                                <span class="text-gray-500 text-right">File Size</span>
+                                <span class="col-span-2 text-gray-200 font-mono">${fileSizeStr}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 py-2 items-center">
+                                <span class="text-gray-500 text-right">Playback</span>
+                                <span class="col-span-2 text-gray-200">${transcodeState}</span>
+                            </div>
+                        `;
+            } else {
+              this.dom.mediaInfoContent.innerHTML = `<div class="text-center text-red-400 py-4">Failed to get media info</div>`;
+            }
+          } catch (e) {
+            this.dom.mediaInfoContent.innerHTML = `<div class="text-center text-red-400 py-4">Failed to fetch data</div>`;
+          }
+        }
+
+        async openTagDrawer() {
+          const current = this.state.videos[this.state.currentIndex];
+          if (!current) return this.showToast("No current video to tag");
+          try {
+            const res = await fetch(`/api/tags?itemId=${encodeURIComponent(current.Id)}`);
+            if (!res.ok) throw new Error("Failed to load tags");
+            const data = await res.json();
+            this.state.tags = data.tags || [];
+            this.state.selectedTags = new Set(data.selected || []);
+            this.renderTags();
+            document.getElementById("newTagForm").classList.add("hidden");
+            document.getElementById("tagDrawer").classList.add("active");
+            this.showInterfaceTemp();
+          } catch (error) { this.showToast("Failed to load tags"); }
+        }
+
+        async updateTagButton(video) {
+          const button = this.dom.tagBtn;
+          if (!button || !video) return;
+          const videoId = video.Id;
+          try {
+            const res = await fetch(`/api/tags?itemId=${encodeURIComponent(videoId)}`);
+            if (!res.ok) throw new Error("Failed to load tags");
+            const data = await res.json();
+            // Ignore stale responses when the user switches videos quickly.
+            if (this.state.videos[this.state.currentIndex]?.Id !== videoId) return;
+            const hasTags = Array.isArray(data.selected) && data.selected.length > 0;
+            button.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="tags" class="${hasTags ? "stroke-primary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons({ root: button });
+          } catch (error) {
+            console.warn("Failed to load current video tag state:", error);
+          }
+        }
+
+        renderTags() {
+          const list = document.getElementById("tagList");
+          list.innerHTML = this.state.tags.map((tag) => `<button type="button" data-tag="${this.escapeHtml(tag)}" class="tag-choice px-3 py-2 rounded border text-sm active:scale-95 ${this.state.selectedTags.has(tag) ? "border-primary bg-primary/20 text-primary" : "border-gray-600 bg-gray-800/40 text-gray-200"}">${this.escapeHtml(tag)}</button>`).join("");
+          document.getElementById("emptyTagsHint").classList.toggle("hidden", this.state.tags.length > 0);
+          list.querySelectorAll(".tag-choice").forEach((button) => button.onclick = () => {
+            const tag = button.dataset.tag;
+            if (this.state.selectedTags.has(tag)) this.state.selectedTags.delete(tag); else this.state.selectedTags.add(tag);
+            this.renderTags();
+          });
+        }
+
+        escapeHtml(value) { const node = document.createElement("span"); node.textContent = value; return node.innerHTML; }
+
+        bindEvents() {
+          this.dom.clickToPlayOverlay.onclick = () => {
+            this.dom.clickToPlayOverlay.style.display = "none";
+            this.playVideo(this.state.currentIndex);
+          };
+
+          this.dom.favoriteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleFavorite();
+            const favBtn = document.getElementById("favoriteBtn");
+            const isFav = this.state.favorites.has(
+              String(this.state.videos[this.state.currentIndex]?.Id),
+            );
+            favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="${isFav ? "text-secondary fill-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+            this.showInterfaceTemp();
+          };
+
+          this.dom.tagBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.openTagDrawer();
+          };
+
+          this.dom.videoInfoArea.onclick = (e) => {
+            e.stopPropagation();
+            const app = document.getElementById("app");
+            if (
+              app.classList.contains("interface-hidden") ||
+              app.classList.contains("grid-active")
+            )
+              return;
+            this.showMediaInfo();
+          };
+
+          this.dom.closeMediaInfoBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.dom.mediaInfoModal.classList.add("hidden");
+            this.showInterfaceTemp();
+          };
+
+          this.dom.mediaInfoModal.onclick = (e) => {
+            if (e.target === e.currentTarget) {
+              this.dom.mediaInfoModal.classList.add("hidden");
+              this.showInterfaceTemp();
+            }
+          };
+
+          this.dom.rightToolbar.addEventListener("click", (e) => {
+            const app = document.getElementById("app");
+            if (app.classList.contains("interface-hidden")) {
+              app.classList.remove("interface-hidden");
+              this.showInterfaceTemp();
+            }
+          });
+
+          this.dom.muteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.state.isMuted = !this.state.isMuted;
+            localStorage.setItem("shufflebox_is_muted", this.state.isMuted);
+
+            const v = this.getVideoElement();
+            if (v) {
+              v.muted = this.state.isMuted;
+            }
+
+            const muteBtn = this.dom.muteBtn;
+            muteBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="${this.state.isMuted ? "volume-x" : "volume-2"}" class="${this.state.isMuted ? "text-secondary" : "stroke-white"} w-6 h-6 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+          };
+
+          this.dom.fullscreenBtn.onclick = (e) => {
+            e.stopPropagation();
+            const app = document.getElementById("app");
+
+            const isIOS =
+              /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+              (navigator.platform === "MacIntel" &&
+                navigator.maxTouchPoints > 1);
+            const isStandalone =
+              window.navigator.standalone === true ||
+              window.matchMedia("(display-mode: standalone)").matches;
+
+            if (isIOS && isStandalone) {
+              if (!app.classList.contains("ios-pwa-fullscreen")) {
+                app.classList.add("ios-pwa-fullscreen");
+                this.showInterfaceTemp();
+                const fullscreenBtn = this.dom.fullscreenBtn;
+                fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="minimize" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+                lucide.createIcons();
+              } else {
+                if (app.classList.contains("interface-hidden")) {
+                  app.classList.remove("interface-hidden");
+                  this.showInterfaceTemp();
+                } else {
+                  app.classList.remove("ios-pwa-fullscreen");
+                  app.classList.remove("interface-hidden");
+                  if (this.csTimer) clearTimeout(this.csTimer);
+                  const fullscreenBtn = this.dom.fullscreenBtn;
+                  fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="maximize" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+                  lucide.createIcons();
+                }
+              }
+              return;
+            }
+
+            if (!document.fullscreenElement) {
+              document.documentElement
+                .requestFullscreen()
+                .then(() => {
+                  this.showInterfaceTemp();
+                })
+                .catch(() => {});
+            } else {
+              if (app.classList.contains("interface-hidden")) {
+                app.classList.remove("interface-hidden");
+                this.showInterfaceTemp();
+              } else {
+                document.exitFullscreen();
+                app.classList.remove("interface-hidden");
+              }
+            }
+          };
+          document.addEventListener("fullscreenchange", () => {
+            const isFull = !!document.fullscreenElement;
+            const fullscreenBtn = this.dom.fullscreenBtn;
+            fullscreenBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center cursor-pointer active:scale-90 transition-transform bg-black/30 rounded-full"><i data-lucide="${isFull ? "minimize" : "maximize"}" class="stroke-white w-5 h-5 drop-shadow-md"></i></div>`;
+            lucide.createIcons();
+
+            if (!isFull) {
+              const app = document.getElementById("app");
+              app.classList.remove("interface-hidden");
+              if (this.csTimer) clearTimeout(this.csTimer);
+            }
+          });
+
+          this.dom.deleteBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleDeleteMode();
+          };
+
+          this.dom.viewModeBtn = document.getElementById("viewModeBtn");
+          this.dom.viewModeBtn.onclick = () => this.toggleViewMode();
+          this.dom.playModeBtn.onclick = () => this.togglePlayMode();
+          this.dom.libraryBtn.onclick = () => this.showLibraries();
+          this.dom.myBtn.onclick = () => this.toggleModal("profilePage", true);
+
+          document.querySelectorAll(".nav-btn").forEach((btn) => {
+            btn.addEventListener("click", function () {
+              if (this.navTimer) clearTimeout(this.navTimer);
+              this.classList.remove("nav-clicked");
+              void this.offsetWidth;
+              this.classList.add("nav-clicked");
+
+              this.navTimer = setTimeout(() => {
+                this.classList.remove("nav-clicked");
+              }, 1000);
+            });
+          });
+
+          document.getElementById("closeLibraryBtn").onclick = () =>
+            this.toggleModal("libraryModal", false);
+
+          const libraryModal = document.getElementById("libraryModal");
+          libraryModal.onclick = (e) => {
+            if (e.target === e.currentTarget) {
+              this.toggleModal("libraryModal", false);
+            }
+          };
+
+          document.getElementById("closeProfileBtn").onclick = () =>
+            this.toggleModal("profilePage", false);
+          document.getElementById("closeTagDrawerBtn").onclick = () => document.getElementById("tagDrawer").classList.remove("active");
+          document.getElementById("newTagBtn").onclick = () => { document.getElementById("newTagForm").classList.remove("hidden"); document.getElementById("newTagInput").focus(); };
+          document.getElementById("cancelNewTagBtn").onclick = () => { document.getElementById("newTagForm").classList.add("hidden"); document.getElementById("newTagInput").value = ""; };
+          document.getElementById("saveNewTagBtn").onclick = async () => {
+            const input = document.getElementById("newTagInput");
+            if (!input.value.trim()) return this.showToast("Enter a tag name");
+            try {
+              const res = await fetch("/api/tags", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: input.value }) });
+              const data = await res.json(); if (!res.ok) throw new Error(data.error);
+              this.state.tags = data.tags; this.state.selectedTags.add(data.name); input.value = ""; document.getElementById("newTagForm").classList.add("hidden"); this.renderTags(); this.showToast(`Created tag “${data.name}”`);
+            } catch (error) { this.showToast(error.message || "Failed to create tag"); }
+          };
+          document.getElementById("saveVideoTagsBtn").onclick = async () => {
+            const current = this.state.videos[this.state.currentIndex]; if (!current) return;
+            try {
+              const res = await fetch("/api/tags/video", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itemId: current.Id, tags: [...this.state.selectedTags] }) });
+              const data = await res.json(); if (!res.ok) throw new Error(data.error);
+              this.state.selectedTags = new Set(data.selected || []);
+              this.updateTagButton(current);
+              document.getElementById("tagDrawer").classList.remove("active"); this.showToast("Video tags saved");
+            } catch (error) { this.showToast(error.message || "Failed to save tags"); }
+          };
+          document.getElementById("saveConfigBtn").onclick = () =>
+            this.saveConfig();
+          document.getElementById("resetConfigBtn").onclick = () =>
+            this.resetConfig();
+
+          this.dom.confirmDeleteBtn.onclick = () => this.executeDelete();
+          this.dom.cancelDeleteBtn.onclick = () =>
+            this.toggleModal("deleteConfirmModal", false);
+
+          this.dom.deleteConfirmModal.onclick = (e) => {
+            if (e.target === e.currentTarget) {
+              this.toggleModal("deleteConfirmModal", false);
+            }
+          };
+
+          document.getElementById("progressBarContainer").onclick = (e) => {
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            const v = this.getVideoElement();
+            if (v && v.duration)
+              v.currentTime =
+                ((e.clientX - rect.left) / rect.width) * v.duration;
+          };
+
+          const container = document.getElementById("app");
+          this.bindGestures(container);
+
+          this.bindKeyboard();
+        }
+
+        bindKeyboard() {
+          let okClickCount = 0;
+          let okClickTimer = null;
+
+          document.addEventListener("keydown", (e) => {
+            const profileActive = document
+              .getElementById("profilePage")
+              .classList.contains("active");
+            const libraryActive = !document
+              .getElementById("libraryModal")
+              .classList.contains("hidden");
+            const tagActive = document
+              .getElementById("tagDrawer")
+              .classList.contains("active");
+
+            const isInput = ["input", "textarea"].includes(
+              document.activeElement.tagName.toLowerCase(),
+            );
+
+            const key = e.key;
+            const keyCode = e.keyCode;
+            const lowKey = key.toLowerCase();
+
+            if (
+              profileActive ||
+              libraryActive ||
+              tagActive ||
+              document.getElementById("app").classList.contains("grid-active")
+            ) {
+              const items = Array.from(
+                document.querySelectorAll(
+                  profileActive
+                    ? "#profilePage .focusable-item"
+                    : libraryActive
+                      ? "#libraryModal .focusable-item"
+                      : tagActive
+                        ? "#tagDrawer .focusable-item"
+                        : "#videoContainer .focusable-item",
+                ),
+              );
+              let currentIndex = items.indexOf(document.activeElement);
+              if (
+                !isInput &&
+                (key === "ArrowUp" ||
+                  key === "ArrowDown" ||
+                  key === "ArrowLeft" ||
+                  key === "ArrowRight" ||
+                  lowKey === "w" ||
+                  lowKey === "a" ||
+                  lowKey === "s" ||
+                  lowKey === "d" ||
+                  [38, 40, 37, 39].includes(keyCode))
+              ) {
+                e.preventDefault();
+                if (currentIndex === -1) {
+                  let startItem = items[0];
+                  if (
+                    document
+                      .getElementById("app")
+                      .classList.contains("grid-active")
+                  ) {
+                    startItem =
+                      items.find(
+                        (it) => it.dataset.index == this.state.currentIndex,
+                      ) || items[0];
+                  }
+                  startItem?.focus();
+                } else {
+                  const isVideoGrid =
+                    document
+                      .getElementById("app")
+                      .classList.contains("grid-active") &&
+                    !profileActive &&
+                    !libraryActive;
+                  if (isVideoGrid) {
+                    let nextIdx = currentIndex;
+                    if (key === "ArrowDown" || lowKey === "s" || keyCode === 40)
+                      nextIdx += 3;
+                    else if (
+                      key === "ArrowUp" ||
+                      lowKey === "w" ||
+                      keyCode === 38
+                    )
+                      nextIdx -= 3;
+                    else if (
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      keyCode === 39
+                    )
+                      nextIdx += 1;
+                    else if (
+                      key === "ArrowLeft" ||
+                      lowKey === "a" ||
+                      keyCode === 37
+                    )
+                      nextIdx -= 1;
+
+                    if (nextIdx >= 0 && nextIdx < items.length) {
+                      items[nextIdx].focus();
+                      items[nextIdx].scrollIntoView({
+                        behavior: "smooth",
+                        block: "center",
+                      });
+                    }
+                  } else if (libraryActive) {
+                    const cur = items[currentIndex];
+                    const curR = cur.getBoundingClientRect();
+                    const curCx = curR.left + curR.width / 2;
+                    const curCy = curR.top + curR.height / 2;
+
+                    let dir;
+                    if (key === "ArrowDown" || lowKey === "s" || keyCode === 40)
+                      dir = "down";
+                    else if (
+                      key === "ArrowUp" ||
+                      lowKey === "w" ||
+                      keyCode === 38
+                    )
+                      dir = "up";
+                    else if (
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      keyCode === 39
+                    )
+                      dir = "right";
+                    else if (
+                      key === "ArrowLeft" ||
+                      lowKey === "a" ||
+                      keyCode === 37
+                    )
+                      dir = "left";
+
+                    let best = null,
+                      bestScore = Infinity;
+                    items.forEach((item) => {
+                      if (item === cur) return;
+                      const r = item.getBoundingClientRect();
+                      const cx = r.left + r.width / 2;
+                      const cy = r.top + r.height / 2;
+                      const dx = cx - curCx,
+                        dy = cy - curCy;
+                      if (dir === "down" && dy <= 2) return;
+                      if (dir === "up" && dy >= -2) return;
+                      if (dir === "right" && dx <= 2) return;
+                      if (dir === "left" && dx >= -2) return;
+                      const score =
+                        dir === "down" || dir === "up"
+                          ? Math.abs(dy) + Math.abs(dx) * 3
+                          : Math.abs(dx) + Math.abs(dy) * 3;
+                      if (score < bestScore) {
+                        bestScore = score;
+                        best = item;
+                      }
+                    });
+
+                    if (best) {
+                      best.focus();
+                      best.scrollIntoView({
+                        behavior: "smooth",
+                        block: "nearest",
+                      });
+                    }
+                  } else {
+                    if (
+                      key === "ArrowDown" ||
+                      lowKey === "s" ||
+                      key === "ArrowRight" ||
+                      lowKey === "d" ||
+                      [40, 39].includes(keyCode)
+                    ) {
+                      currentIndex = (currentIndex + 1) % items.length;
+                    } else {
+                      currentIndex =
+                        (currentIndex - 1 + items.length) % items.length;
+                    }
+                    items[currentIndex].focus();
+                  }
+                }
+                return;
+              }
+
+              if (key === "Enter" || keyCode === 13) {
+                if (
+                  document.activeElement &&
+                  document.activeElement.classList.contains("focusable-item")
+                ) {
+                  if (
+                    document.activeElement.tagName.toLowerCase() === "input" &&
+                    document.activeElement.type !== "checkbox"
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  document.activeElement.click();
+                  return;
+                }
+              }
+            }
+
+            if (isInput) return;
+
+            if (key === "ArrowUp" || lowKey === "w" || keyCode === 38) {
+              e.preventDefault();
+              this.prevVideo();
+            } else if (
+              key === "ArrowDown" ||
+              lowKey === "s" ||
+              keyCode === 40
+            ) {
+              e.preventDefault();
+              this.nextVideo();
+            } else if (
+              key === "ArrowLeft" ||
+              lowKey === "a" ||
+              keyCode === 37
+            ) {
+              e.preventDefault();
+              const v = this.getVideoElement();
+              if (v) v.currentTime = Math.max(0, v.currentTime - 15);
+              this.showInterfaceTemp();
+            } else if (
+              key === "ArrowRight" ||
+              lowKey === "d" ||
+              keyCode === 39
+            ) {
+              e.preventDefault();
+              const v = this.getVideoElement();
+              if (v && v.duration)
+                v.currentTime = Math.min(v.duration, v.currentTime + 15);
+              this.showInterfaceTemp();
+            } else if (key === " " || key === "Enter" || keyCode === 13) {
+              e.preventDefault();
+              if (key === " ") {
+                this.togglePlay();
+              } else {
+                okClickCount++;
+                if (okClickCount === 1) {
+                  okClickTimer = setTimeout(() => {
+                    this.togglePlay();
+                    okClickCount = 0;
+                  }, 300);
+                } else if (okClickCount === 2) {
+                  clearTimeout(okClickTimer);
+                  okClickCount = 0;
+                  this.handleDoubleTap(
+                    window.innerWidth / 2,
+                    window.innerHeight / 2,
+                  );
+                }
+              }
+            } else if (
+              key.toLowerCase() === "j" ||
+              keyCode === 18 ||
+              keyCode === 93 ||
+              keyCode === 118
+            ) {
+              if (
+                key.toLowerCase() === "j" ||
+                [18, 93, 118].includes(keyCode)
+              ) {
+                e.preventDefault();
+                this.toggleScaleMode();
+                this.showInterfaceTemp();
+              }
+            } else {
+              if (lowKey === "r") {
+                this.dom.playModeBtn.click();
+              } else if (lowKey === "f") {
+                this.dom.fullscreenBtn.click();
+              } else if (lowKey === "e") {
+                this.dom.viewModeBtn.click();
+              } else if (lowKey === "g") {
+                const modal = document.getElementById("libraryModal");
+                if (modal && !modal.classList.contains("hidden")) {
+                  this.toggleModal("libraryModal", false);
+                } else {
+                  this.showLibraries();
+                  this.dom.libraryBtn.classList.remove("nav-clicked");
+                  void this.dom.libraryBtn.offsetWidth;
+                  this.dom.libraryBtn.classList.add("nav-clicked");
+                  setTimeout(
+                    () => this.dom.libraryBtn.classList.remove("nav-clicked"),
+                    1000,
+                  );
+                }
+              } else if (lowKey === "i") {
+                const modal = document.getElementById("profilePage");
+                if (modal && modal.classList.contains("active")) {
+                  this.toggleModal("profilePage", false);
+                } else {
+                  this.toggleModal("profilePage", true);
+                  this.dom.myBtn.classList.remove("nav-clicked");
+                  void this.dom.myBtn.offsetWidth;
+                  this.dom.myBtn.classList.add("nav-clicked");
+                  setTimeout(
+                    () => this.dom.myBtn.classList.remove("nav-clicked"),
+                    1000,
+                  );
+                }
+              } else if (lowKey === "v") {
+                const isGridActive = document
+                  .getElementById("app")
+                  .classList.contains("grid-active");
+                if (!isGridActive) {
+                  if (!this.dom.mediaInfoModal.classList.contains("hidden")) {
+                    this.toggleModal("mediaInfoModal", false);
+                  } else {
+                    this.showMediaInfo();
+                  }
+                }
+              } else if (lowKey === "u") {
+                this.handleDoubleTap(
+                  window.innerWidth / 2,
+                  window.innerHeight / 2,
+                );
+              } else if (lowKey === "m") {
+                this.dom.muteBtn.click();
+              }
+            }
+          });
+        }
+
+        bindGestures(container) {
+          let state = "IDLE"; // IDLE, SPEED, DRAG
+          let x0 = 0,
+            y0 = 0;
+          let t0 = 0;
+          let longPressTimer = null;
+          let clickTimer = null;
+          let clickCount = 0;
+          let targetTime = 0;
+          let originalTime = 0;
+          let gestureActive = false;
+
+          container.style.touchAction = "pan-y";
+          container.style.userSelect = "none";
+          container.style.webkitUserSelect = "none";
+
+          const speedToast = document.createElement("div");
+          speedToast.className =
+            "absolute top-[calc(env(safe-area-inset-top)+20px)] left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white px-4 py-2 rounded-full text-sm font-bold opacity-0 transition-opacity z-50 pointer-events-none flex items-center gap-2";
+          speedToast.innerHTML =
+            '<i data-lucide="fast-forward" class="w-4 h-4 text-green-400"></i><span>Playing at 2x speed</span>';
+          document.getElementById("app").appendChild(speedToast);
+          lucide.createIcons();
+
+          const startHandler = (e) => {
+            if (this.state.viewMode !== "stream") {
+              gestureActive = false;
+              return;
+            }
+            const excluded = [
+              ".bottom-nav",
+              ".bottom-info",
+              ".right-toolbar",
+              "#fullscreenBtn",
+              "#deleteBtn",
+              "#libraryModal",
+              "#mediaInfoModal",
+              "#deleteConfirmModal",
+              ".profile-layer",
+              "#tagDrawer",
+            ];
+            if (excluded.some((sel) => e.target.closest(sel))) {
+              gestureActive = false;
+              return;
+            }
+
+            gestureActive = true;
+            state = "IDLE";
+            const t = e.touches ? e.touches[0] : e;
+            x0 = t.clientX;
+            y0 = t.clientY;
+            t0 = Date.now();
+
+            const v = this.getVideoElement();
+            if (v) originalTime = v.currentTime;
+
+            clearTimeout(longPressTimer);
+            longPressTimer = setTimeout(() => {
+              if (state === "IDLE") {
+                state = "SPEED";
+                if (v) v.playbackRate = 2.0;
+                speedToast.classList.remove("opacity-0");
+              }
+            }, 300);
+          };
+
+          const moveHandler = (e) => {
+            if (!gestureActive || this.state.viewMode !== "stream") return;
+            const t = e.touches ? e.touches[0] : e;
+            const diffX = t.clientX - x0;
+            const diffY = t.clientY - y0;
+
+            if (Math.abs(diffX) > Math.abs(diffY)) {
+              if (e.cancelable) e.preventDefault();
+            }
+
+            if (Math.abs(diffX) > 15 || Math.abs(diffY) > 15) {
+              clearTimeout(longPressTimer);
+
+              if (state === "SPEED") {
+                speedToast.classList.add("opacity-0");
+                const v = this.getVideoElement();
+                if (v) v.playbackRate = 1.0;
+              }
+
+              if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 15) {
+                state = "DRAG";
+              }
+            }
+
+            if (state === "DRAG") {
+              if (e.cancelable) e.preventDefault();
+              const v = this.getVideoElement();
+              if (v && v.duration) {
+                const ratio = diffX / (window.innerWidth / 2);
+                targetTime = originalTime + ratio * v.duration;
+                targetTime = Math.max(0, Math.min(targetTime, v.duration));
+
+                const progressEl = document.getElementById("progressLine");
+                if (progressEl)
+                  progressEl.style.width = `${(targetTime / v.duration) * 100}%`;
+              }
+            }
+          };
+
+          const endHandler = (e) => {
+            if (!gestureActive || this.state.viewMode !== "stream") return;
+            gestureActive = false;
+            clearTimeout(longPressTimer);
+
+            const v = this.getVideoElement();
+
+            if (state === "SPEED") {
+              if (v) v.playbackRate = 1.0;
+              speedToast.classList.add("opacity-0");
+              state = "IDLE";
+              this.showInterfaceTemp();
+              return;
+            }
+
+            if (state === "DRAG") {
+              if (v) v.currentTime = targetTime;
+              state = "IDLE";
+              this.showInterfaceTemp();
+              return;
+            }
+
+            state = "IDLE";
+            const t = e.changedTouches ? e.changedTouches[0] : e;
+            const diffX = t.clientX - x0;
+            const diffY = t.clientY - y0;
+            const time = Date.now() - t0;
+
+            if (Math.abs(diffX) < 10 && Math.abs(diffY) < 10 && time < 300) {
+              clickCount++;
+              if (clickCount === 1) {
+                clickTimer = setTimeout(() => {
+                  const app = document.getElementById("app");
+                  if (app.classList.contains("interface-hidden")) {
+                    app.classList.remove("interface-hidden");
+                    this.showInterfaceTemp();
+                  } else {
+                    this.togglePlay();
+                  }
+                  clickCount = 0;
+                }, 250);
+              } else if (clickCount === 2) {
+                clearTimeout(clickTimer);
+                clickCount = 0;
+                const w = window.innerWidth;
+                if (t.clientX < w / 4) {
+                  this.handleDoubleTapSkip("rewind", t.clientX, t.clientY);
+                } else if (t.clientX > (w * 3) / 4) {
+                  this.handleDoubleTapSkip("forward", t.clientX, t.clientY);
+                } else {
+                  this.handleDoubleTap(t.clientX, t.clientY);
+                }
+              }
+            }
+          };
+
+          container.style.userSelect = "none";
+          container.style.webkitUserSelect = "none";
+
+          container.addEventListener("contextmenu", (e) => {
+            if (
+              e.target.closest(".touch-layer") ||
+              e.target.tagName.toLowerCase() === "video"
+            ) {
+              e.preventDefault();
+            }
+          });
+
+          container.addEventListener("touchstart", startHandler, {
+            passive: true,
+          });
+          container.addEventListener("touchmove", moveHandler, {
+            passive: false,
+          });
+
+          let lastTouchEnd = 0;
+          container.addEventListener("touchend", (e) => {
+            lastTouchEnd = Date.now();
+            endHandler(e);
+          });
+          container.addEventListener("touchcancel", () => {
+            gestureActive = false;
+            state = "IDLE";
+            clearTimeout(longPressTimer);
+            speedToast.classList.add("opacity-0");
+          });
+
+          let isMouseDown = false;
+          container.addEventListener("mousedown", (e) => {
+            if (e.button !== 0) return;
+            if (Date.now() - lastTouchEnd < 500) return;
+            isMouseDown = true;
+            e.touches = [{ clientX: e.clientX, clientY: e.clientY }];
+            startHandler(e);
+          });
+          container.addEventListener("mousemove", (e) => {
+            if (!isMouseDown) return;
+            e.touches = [{ clientX: e.clientX, clientY: e.clientY }];
+            moveHandler(e);
+          });
+          const mouseEndHandler = (e) => {
+            if (!isMouseDown) return;
+            isMouseDown = false;
+            e.changedTouches = [{ clientX: e.clientX, clientY: e.clientY }];
+            endHandler(e);
+          };
+          container.addEventListener("mouseup", mouseEndHandler);
+          container.addEventListener("mouseleave", mouseEndHandler);
+        }
+
+        async handleDoubleTapSkip(direction, x, y) {
+          const v = this.getVideoElement();
+          if (!v || !v.duration) return;
+
+          const isRewind = direction === "rewind";
+          if (isRewind) {
+            v.currentTime = Math.max(0, v.currentTime - 15);
+          } else {
+            v.currentTime = Math.min(v.duration, v.currentTime + 15);
+          }
+          this.showInterfaceTemp();
+
+          const bubble = document.createElement("div");
+          bubble.innerHTML = `
+                    <div class="flex flex-col items-center justify-center bg-black/40 backdrop-blur-md text-white rounded-full w-[80px] h-[80px] shadow-2xl space-y-1">
+                        <div class="flex items-center justify-center">
+                            ${isRewind ? '<i data-lucide="chevrons-left" class="w-6 h-6"></i>' : '<i data-lucide="chevrons-right" class="w-6 h-6"></i>'}
+                        </div>
+                        <span class="text-xs font-bold leading-none">15s</span>
+                    </div>
+                `;
+          bubble.className =
+            "absolute pointer-events-none z-50 transform pointer-events-none transition-all duration-300 ease-out flex items-center justify-center";
+          bubble.style.top = `${Math.max(80, Math.min(y - 40, window.innerHeight - 80))}px`;
+          if (isRewind) bubble.style.left = "20px";
+          else bubble.style.right = "20px";
+          bubble.style.opacity = "0";
+          bubble.style.transform = `scale(0.8) ${isRewind ? "translateX(-20px)" : "translateX(20px)"}`;
+
+          document.getElementById("app").appendChild(bubble);
+          lucide.createIcons({ root: bubble });
+
+          requestAnimationFrame(() => {
+            bubble.style.transform = "scale(1) translateX(0)";
+            bubble.style.opacity = "1";
+            setTimeout(() => {
+              bubble.style.transform = `scale(0.8) ${isRewind ? "translateX(-20px)" : "translateX(20px)"}`;
+              bubble.style.opacity = "0";
+              setTimeout(() => bubble.remove(), 300);
+            }, 400);
+          });
+        }
+
+        async handleDoubleTap(x, y) {
+          const heart = document.createElement("div");
+          heart.innerHTML =
+            '<i data-lucide="heart" class="fill-red-500 text-red-500 w-16 h-16 drop-shadow-xl"></i>';
+          heart.className =
+            "absolute pointer-events-none z-50 transform pointer-events-none transition-all duration-700 ease-out";
+
+          const rotation = Math.floor(Math.random() * 40) - 20;
+          heart.style.left = `${x - 32}px`;
+          heart.style.top = `${y - 32}px`;
+          heart.style.transform = `scale(0.5) rotate(${rotation}deg)`;
+          heart.style.opacity = "0";
+
+          document.getElementById("app").appendChild(heart);
+          lucide.createIcons({ root: heart });
+
+          requestAnimationFrame(() => {
+            heart.style.transform = `scale(1.2) rotate(${rotation}deg)`;
+            heart.style.opacity = "1";
+
+            setTimeout(() => {
+              heart.style.transform = `scale(1) rotate(${rotation}deg) translateY(-100px)`;
+              heart.style.opacity = "0";
+              setTimeout(() => heart.remove(), 700);
+            }, 200);
+          });
+
+          const currentVideo = this.state.videos[this.state.currentIndex];
+          if (currentVideo && !currentVideo.UserData?.IsFavorite) {
+            try {
+              const { server, token, userId } = this.config;
+              const res = await fetch(
+                `${server}/emby/Users/${userId}/FavoriteItems/${currentVideo.Id}?api_key=${token}`,
+                { method: "POST" },
+              );
+              if (res.ok) {
+                if (!currentVideo.UserData) currentVideo.UserData = {};
+                currentVideo.UserData.IsFavorite = true;
+                this.state.favorites.add(String(currentVideo.Id));
+
+                const favBtn = document.getElementById("favoriteBtn");
+                if (favBtn) {
+                  favBtn.innerHTML = `<div class="w-12 h-12 flex items-center justify-center"><i data-lucide="heart" class="text-secondary fill-secondary w-6 h-6 drop-shadow-md"></i></div>`;
+                  lucide.createIcons({ root: favBtn });
+                }
+                this.showToast("❤️ Favorited");
+              }
+            } catch (e) {
+              console.error("Double tap favorite failed:", e);
+            }
+          }
+        }
+
+        toggleModal(id, show) {
+          const el = document.getElementById(id);
+          if (id === "profilePage") {
+            if (show) {
+              el.classList.add("active");
+              this.state.currentTab = "my";
+            } else {
+              el.classList.remove("active");
+            }
+            if (show) this.updateTabHighlight();
+          } else {
+            if (show) el.classList.remove("hidden");
+            else el.classList.add("hidden");
+          }
+
+          if (show) {
+            setTimeout(() => {
+              const allItems = Array.from(
+                el.querySelectorAll(".focusable-item"),
+              );
+              const selected = allItems.find((i) =>
+                i.classList.contains("bg-primary/20"),
+              );
+              const target = selected || allItems[0];
+              if (target) target.focus();
+            }, 300);
+          } else {
+            if (
+              document.activeElement &&
+              document.activeElement.closest(`#${id}`)
+            ) {
+              document.activeElement.blur();
+            }
+          }
+
+          this.showInterfaceTemp();
+        }
+
+        toggleLoading(show) {
+          const el = this.dom.loading;
+          if (show) {
+            el.classList.remove("hidden");
+            const btn = this.getPlayButton();
+            if (btn) btn.classList.remove("paused");
+          } else {
+            el.classList.add("hidden");
+          }
+        }
+
+        showToast(msg, duration = 3000) {
+          if (this._toastTimer) clearTimeout(this._toastTimer);
+          const t = this.dom.toast;
+          t.textContent = msg;
+          t.classList.remove("opacity-0");
+          this._toastTimer = setTimeout(
+            () => t.classList.add("opacity-0"),
+            duration,
+          );
+        }
+
+        formatTime(s) {
+          if (!s) return "00:00";
+          const m = Math.floor(s / 60);
+          const sec = Math.floor(s % 60);
+          return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+        }
+      }
+
+      window.onload = () => {
+        lucide.createIcons();
+        window.app = new EmbyApp();
+
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.register("./sw.js").catch(() => {});
+        }
+      };
+    </script>
+  </body>
+</html>
+<!--
+  End of ShuffleBox.
+  Made with ❤️ by Juneix (https://github.com/juneix)
+  Keep Coding, Keep Fun.
+-->

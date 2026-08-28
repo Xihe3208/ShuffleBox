@@ -1,0 +1,23 @@
+[Unit]
+Description=ShuffleBox SMB media player
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/ShuffleBox
+EnvironmentFile=-/etc/shufflebox/shufflebox.env
+ExecStart=/usr/bin/node /opt/ShuffleBox/server.js
+# Keep FFmpeg transcodes from consuming the entire CPU. This limit applies to
+# the service cgroup and therefore also covers all FFmpeg child processes.
+CPUQuota=75%
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

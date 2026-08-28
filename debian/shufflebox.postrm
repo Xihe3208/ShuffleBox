@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if [ "${1-}" = purge ]; then
+    # Purge removes only ShuffleBox configuration. Runtime data, credentials,
+    # thumbnails, HLS output and migration backups remain recoverable.
+    rm -f /etc/shufflebox/shufflebox.env
+    rmdir /etc/shufflebox 2>/dev/null || true
+fi
+
+#DEBHELPER#
+
+exit 0

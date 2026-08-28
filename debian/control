@@ -1,0 +1,17 @@
+Source: shufflebox
+Section: web
+Priority: optional
+Maintainer: ShuffleBox Maintainers <shufflebox@example.invalid>
+Standards-Version: 4.7.0
+Build-Depends: debhelper-compat (= 13), nodejs (>= 18)
+Rules-Requires-Root: binary-targets
+
+Package: shufflebox
+Architecture: all
+Depends: nodejs (>= 18), cifs-utils, ffmpeg, mount, systemd, init-system-helpers (>= 1.52~), ${misc:Depends}
+Description: self-hosted SMB media player ShuffleBox
+ ShuffleBox is a self-hosted SMB media player with a mobile-friendly web UI,
+ favorites, media-library selection, thumbnails and HLS transcoding.
+ .
+ The package keeps runtime state in /var/lib/shufflebox and does not include SMB
+ share addresses, usernames or passwords.

@@ -1,0 +1,162 @@
+# ShuffleBox
+
+ShuffleBox 是一个面向 Debian/Proxmox LXC 的自托管 SMB 媒体播放器。它以只读
+方式挂载 SMB 共享，扫描视频文件，并提供中文和英文的移动端 Web UI、随机播放、
+媒体库选择、收藏、标签、缩略图和 HLS 转码功能。
+
+## 目录与运行路径
+
+- `/opt/ShuffleBox`：Node.js 服务和中英文前端资源。
+- `/etc/shufflebox/shufflebox.env`：服务配置；由安装脚本创建，升级时保留。
+- `/var/lib/shufflebox`：运行数据，包括 SMB 配置、收藏、标签、媒体偏好、缩略图
+  和 HLS 文件。升级、普通卸载和 purge 都保留这里的数据。
+- `/mnt/shufflebox-media`：SMB 共享挂载点。
+- `/lib/systemd/system/shufflebox.service`：systemd 服务文件；系统合并 `/usr`
+  时可能显示为 `/usr/lib/systemd/system/shufflebox.service`。
+- `/usr/bin/shufflebox`：服务和设置命令。
+
+服务默认监听 TCP 80。服务日志写入 journald；排查时可查看
+`shufflebox.service` 的日志。用户日常不需要直接执行 systemctl。
+
+## Debian 软件包
+
+软件包名为 `shufflebox`，架构为 `all`。实际运行依赖由 Debian 处理：
+
+- `nodejs (>= 18)`
+- `cifs-utils`
+- `ffmpeg`
+- `mount`
+- `systemd`
+- `init-system-helpers`
+
+包内包含应用、中文和英文前端、README、服务文件、CLI 和配置模板；不包含 SMB
+地址、用户名、密码、媒体文件或 `/var/lib/shufflebox` 运行数据。安装和服务启动
+不会执行 first-boot 软件安装逻辑。
+
+在构建机执行：
+
+```bash
+/opt/ShuffleBox/debian/build-deb.sh /root
+```
+
+输出示例：`/root/shufflebox_1.1.0-1_all.deb`。安装本地包：
+
+```bash
+apt install ./shufflebox_1.1.0-1_all.deb
+```
+
+安装脚本会创建配置、数据目录、挂载点，启用并启动 `shufflebox.service`。重新
+安装或升级时不会覆盖用户配置，也不会清理 `/var/lib/shufflebox` 中的收藏、标签、
+缩略图、HLS 文件、媒体偏好、SMB 配置和其他数据。
+
+普通卸载保留配置、挂载点和全部运行数据：
+
+```bash
+apt remove shufflebox
+```
+
+`apt purge shufflebox` 只删除 `/etc/shufflebox/shufflebox.env` 和空配置目录，
+不会删除 `/var/lib/shufflebox`、媒体文件、凭据或迁移备份。
+
+## CLI 命令
+
+服务管理通过 `/usr/bin/shufflebox` 完成：
+
+```text
+shufflebox status
+shufflebox start
+shufflebox stop
+shufflebox restart
+shufflebox enable
+shufflebox disable
+shufflebox active
+shufflebox -h
+shufflebox -v
+```
+
+`status`、`start`、`stop`、`restart`、`enable`、`disable` 和 `active` 分别用于
+查看、启动、停止、重启、设置开机启动、取消开机启动和快速查看状态。`enable`
+不会立即启动服务，也不支持 `enable --now`。`active` 只输出 `active`、`inactive`
+或 `failed`。
+
+管理员设置入口通过以下命令控制：
+
+```bash
+shufflebox admin-settings true
+shufflebox admin-settings false
+```
+
+该命令只接受 `true` 或 `false`，需要 root 权限；写入配置使用同目录临时文件和
+原子替换，保留其他配置项，并在成功写入后自动重启 ShuffleBox。`true` 显示 Web
+主页中的管理员设置入口，`false` 隐藏入口。默认值为 `false`。
+
+## SMB 配置
+
+首次安装不携带任何 SMB 凭据。管理员可临时执行：
+
+```bash
+shufflebox admin-settings true
+```
+
+然后在 Web UI 的管理员设置中填写 SMB 地址、用户名、密码、SMB 协议版本和访客
+选项。保存时服务会通过正式配置流程创建 `/var/lib/shufflebox/.smb-credentials`，
+权限为 `0600`；默认使用只读挂载。配置完成后建议隐藏入口：
+
+```bash
+shufflebox admin-settings false
+```
+
+只有明确需要媒体删除功能时才应启用删除模式。服务启动时会自动重新挂载已保存的
+共享并扫描媒体库；网络未就绪或共享不可用时，Web/API 仍会启动，并在状态接口中
+报告扫描错误。
+
+常用接口：
+
+- `GET /api/status`：版本、服务配置可见性、挂载和扫描状态。
+- `GET /api/media/tree`：媒体目录树。
+- `GET /api/media/preferences`、`PUT /api/media/preferences`：媒体库偏好。
+- `POST /api/rescan`：重新扫描媒体库。
+- `/emby/Users/<用户>/Items`：兼容媒体列表 API。
+- `/emby/Items/<媒体 ID>/Images/Primary`：缩略图访问。
+- `/emby/Videos/<媒体 ID>/stream` 和 `master.m3u8`：视频与 HLS 访问。
+
+## 一次性旧版迁移
+
+安装 ShuffleBox 前会先停止可识别的旧服务并创建 root-only 备份，备份目录为
+`/var/backups/shufflebox/legacy-<时间戳>-<进程号>`。只有目标路径不存在时才会迁移，
+不会覆盖已有的新配置或新数据：
+
+- `/var/lib/embyx` → `/var/lib/shufflebox`
+- `/etc/embyx` → `/etc/shufflebox`
+- `/mnt/embyx-media` → `/mnt/shufflebox-media`
+
+旧环境中的 `EMBYX_ADMIN_SETTINGS` 会一次性转换为
+`SHUFFLEBOX_ADMIN_SETTINGS`，旧默认路径也会转换为新路径。活动中的旧媒体挂载点
+只创建新的挂载点，媒体不会被复制；ShuffleBox 会从已保存的 SMB 配置重新挂载。
+已有新目录或新配置时，旧内容会保留在原处并记录为未覆盖，不会合并覆盖。
+
+旧 first-boot 安装服务和脚本不会继续运行；仅在内容精确匹配已知旧版实现时才会
+停用、备份并清理。迁移备份不会自动删除。
+
+## 构建与检查
+
+构建机至少应执行：
+
+```bash
+dpkg-deb -I /root/shufflebox_1.1.0-1_all.deb
+dpkg-deb -c /root/shufflebox_1.1.0-1_all.deb
+sh -n bin/shufflebox debian/build-deb.sh debian/shufflebox.preinst \
+  debian/shufflebox.postinst debian/shufflebox.prerm debian/shufflebox.postrm
+node --check server.js
+systemd-analyze verify debian/shufflebox.service
+```
+
+还应确认包的架构为 `all`、依赖完整，包内没有 SMB 凭据、运行数据或重复的
+`README.Debian`，并确认 README 是项目中唯一的说明文档。测试机上安装包后，依次
+验证 CLI、HTTP、`/api/status`、媒体列表、实际 SMB 挂载、扫描、缩略图/视频访问、
+重启自动启动、升级数据保留和普通卸载数据保留。
+
+## Proxmox LXC 注意事项
+
+容器必须允许 CIFS 挂载。特权容器通常兼容性最好；容器模板无法替代宿主机侧的
+权限配置，具体挂载能力需要在 Proxmox 主机上确认。

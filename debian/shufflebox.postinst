@@ -1,0 +1,118 @@
+#!/bin/sh
+set -eu
+
+CONFIG_DIR=/etc/shufflebox
+CONFIG_FILE=$CONFIG_DIR/shufflebox.env
+TEMPLATE=/usr/share/shufflebox/shufflebox.env.example
+
+ensure_dir() {
+    directory=$1
+    mode=$2
+    if [ -e "$directory" ]; then
+        if [ ! -d "$directory" ]; then
+            echo "ShuffleBox: expected directory but found $directory" >&2
+            exit 1
+        fi
+    else
+        install -d -m "$mode" "$directory"
+    fi
+}
+
+normalize_env() {
+    input_file=$1
+    output_file=$2
+    ensure_admin=$3
+    output_mode=0640
+    output_owner=root:root
+    if [ -e "$output_file" ]; then
+        output_mode=$(stat -c '%a' "$output_file")
+        output_owner=$(stat -c '%u:%g' "$output_file")
+    fi
+    temp_file=$(mktemp "$CONFIG_DIR/.shufflebox.env.XXXXXX")
+    cleanup_temp() {
+        rm -f "$temp_file"
+    }
+    trap cleanup_temp EXIT HUP INT TERM
+    umask 077
+    awk -v ensure_admin="$ensure_admin" '
+        function line_value(line, position) {
+            position = index(line, "=")
+            return position ? substr(line, position + 1) : ""
+        }
+        BEGIN { admin_seen = 0 }
+        {
+            line = $0
+            if (line ~ /^[[:space:]]*EMBYX_ADMIN_SETTINGS[[:space:]]*=/) {
+                if (!admin_seen) {
+                    value = line_value(line)
+                    if (value != "true" && value != "false") value = "false"
+                    print "SHUFFLEBOX_ADMIN_SETTINGS=" value
+                    admin_seen = 1
+                }
+                next
+            }
+            if (line ~ /^[[:space:]]*SHUFFLEBOX_ADMIN_SETTINGS[[:space:]]*=/) {
+                if (!admin_seen) {
+                    print line
+                    admin_seen = 1
+                }
+                next
+            }
+            if (line == "DATA_DIR=/var/lib/embyx") {
+                print "DATA_DIR=/var/lib/shufflebox"
+                next
+            }
+            if (line == "MEDIA_ROOT=/mnt/embyx-media") {
+                print "MEDIA_ROOT=/mnt/shufflebox-media"
+                next
+            }
+            if (line ~ /^[[:space:]]*#/) gsub(/EmbyX/, "legacy")
+            print line
+        }
+        END {
+            if (ensure_admin == "1" && !admin_seen)
+                print "SHUFFLEBOX_ADMIN_SETTINGS=false"
+        }
+    ' "$input_file" > "$temp_file"
+    chown "$output_owner" "$temp_file"
+    chmod "$output_mode" "$temp_file"
+    mv -f "$temp_file" "$output_file"
+    trap - EXIT HUP INT TERM
+}
+
+if [ "$1" = configure ]; then
+    ensure_dir /var/lib/shufflebox 0700
+    ensure_dir /mnt/shufflebox-media 0755
+    ensure_dir "$CONFIG_DIR" 0755
+
+    # The template lives in /usr/share so dpkg never overwrites a user file.
+    # A legacy environment is transformed only when the new file is absent.
+    if [ ! -e "$CONFIG_FILE" ]; then
+        if [ -f /etc/embyx/embyx.env ]; then
+            normalize_env /etc/embyx/embyx.env "$CONFIG_FILE" 1
+            echo "ShuffleBox: migrated the legacy environment configuration." >&2
+        else
+            install -o root -g root -m 0640 "$TEMPLATE" "$CONFIG_FILE"
+        fi
+    elif grep -Eq '^[[:space:]]*(EMBYX_ADMIN_SETTINGS|DATA_DIR|MEDIA_ROOT)[[:space:]]*=' "$CONFIG_FILE" &&
+         grep -Eq '^[[:space:]]*EMBYX_ADMIN_SETTINGS[[:space:]]*=|^[[:space:]]*DATA_DIR=/var/lib/embyx$|^[[:space:]]*MEDIA_ROOT=/mnt/embyx-media$' "$CONFIG_FILE"; then
+        # This is a one-time compatibility conversion for a partially
+        # migrated new configuration; all new writes use ShuffleBox names.
+        normalize_env "$CONFIG_FILE" "$CONFIG_FILE" 0
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl disable embyx.service >/dev/null 2>&1 || true
+        systemctl enable shufflebox.service >/dev/null 2>&1 || true
+        if systemctl is-active --quiet shufflebox.service; then
+            systemctl restart shufflebox.service >/dev/null 2>&1 || true
+        else
+            systemctl start shufflebox.service >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0
