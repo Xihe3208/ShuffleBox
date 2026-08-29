@@ -106,19 +106,40 @@ let thumbnailPrewarmCursor = 0;
 let thumbnailPrewarmTimer = null;
 let thumbnailPrewarmPausedByLimit = false;
 const HLS_IDLE_TIMEOUT_MS = 5 * 1000;
+const HLS_STARTUP_TIMEOUT_MS = 20 * 1000;
 const hlsJobs = new Map();
 const PLAYBACK_SESSION_TTL_MS = 10 * 60 * 1000;
 const PLAYBACK_BURST_SECONDS = 3;
 const PLAYBACK_MIN_BYTES_PER_SECOND = 512 * 1024;
 const playbackSessions = new Map();
 
+function scheduleHlsCleanup(job, delayMs) {
+  if (job.cleanupScheduled) return;
+  job.cleanupScheduled = true;
+  const cleanup = setTimeout(
+    () => fsp.rm(job.directory, { recursive: true, force: true }).catch(() => {}),
+    delayMs,
+  );
+  cleanup.unref();
+}
+
 function stopHlsJob(itemId, reason = "idle") {
   const job = hlsJobs.get(itemId);
   if (!job) return;
   clearTimeout(job.idleTimer);
+  job.idleTimer = null;
   hlsJobs.delete(itemId);
   job.cleanupOnClose = true;
-  if (!job.child.killed) job.child.kill("SIGTERM");
+  if (!job.ready && !job.startupError) {
+    const error = new Error("HLS 转码已停止");
+    error.code = "HLS_STOPPED";
+    job.startupError = error;
+  }
+  if (job.child) {
+    if (!job.child.killed) job.child.kill("SIGTERM");
+  } else {
+    scheduleHlsCleanup(job, 0);
+  }
   console.log(`Stopped HLS transcode for ${itemId} (${reason})`);
 }
 
@@ -127,9 +148,11 @@ function touchHlsJob(itemId) {
   if (!job) return;
   job.lastAccess = Date.now();
   clearTimeout(job.idleTimer);
+  job.idleTimer = null;
+  if (!job.ready) return;
   job.idleTimer = setTimeout(() => {
     const current = hlsJobs.get(itemId);
-    if (!current) return;
+    if (!current || !current.ready) return;
     if (Date.now() - current.lastAccess >= HLS_IDLE_TIMEOUT_MS)
       stopHlsJob(itemId, "no requests");
     else touchHlsJob(itemId);
@@ -1516,28 +1539,27 @@ async function probeItem(item) {
   return item;
 }
 
-async function waitForFile(file, timeoutMs = 20000) {
+async function waitForFile(file, timeoutMs = HLS_STARTUP_TIMEOUT_MS, getAbortError) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
+    const abortError = getAbortError?.();
+    if (abortError) throw abortError;
     try {
       await fsp.access(file);
       return;
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+  const abortError = getAbortError?.();
+  if (abortError) throw abortError;
   throw new Error("转码启动超时");
 }
 
-async function ensureHls(item) {
-  const directory = path.join(HLS_DIR, item.Id);
-  const playlist = path.join(directory, "index.m3u8");
-  if (hlsJobs.has(item.Id)) touchHlsJob(item.Id);
+async function startHlsJob(item, job) {
+  const { directory, playlist } = job;
   try {
-    await fsp.access(playlist);
-    return playlist;
-  } catch {}
-  if (!hlsJobs.has(item.Id)) {
     await fsp.mkdir(directory, { recursive: true });
+    if (job.startupError) throw job.startupError;
     const child = spawn(
       "ffmpeg",
       [
@@ -1576,38 +1598,75 @@ async function ensureHls(item) {
       ],
       { cwd: directory, stdio: ["ignore", "ignore", "pipe"] },
     );
+    job.child = child;
     let errorText = "";
     child.stderr.on("data", (chunk) => {
       errorText = (errorText + chunk).slice(-4000);
     });
-    const job = {
-      child,
-      lastAccess: Date.now(),
-      idleTimer: null,
-      cleanupOnClose: false,
-    };
     child.on("close", (code) => {
-      const current = hlsJobs.get(item.Id);
-      if (current?.child === child) hlsJobs.delete(item.Id);
+      if (!job.ready && code !== 0 && !job.startupError)
+        job.startupError = new Error("转码启动失败");
+      if (hlsJobs.get(item.Id) === job) hlsJobs.delete(item.Id);
       clearTimeout(job.idleTimer);
+      job.idleTimer = null;
       if (code !== 0)
         console.error(`HLS transcode failed for ${item.Path}:`, errorText);
-      const cleanup = setTimeout(
-        () => fsp.rm(directory, { recursive: true, force: true }).catch(() => {}),
+      scheduleHlsCleanup(
+        job,
         job.cleanupOnClose ? 0 : 60 * 60 * 1000,
       );
-      cleanup.unref();
     });
     child.on("error", (error) => {
-      const current = hlsJobs.get(item.Id);
-      if (current?.child === child) hlsJobs.delete(item.Id);
-      clearTimeout(job.idleTimer);
+      if (!job.ready && !job.startupError) job.startupError = error;
       console.error(error);
     });
-    hlsJobs.set(item.Id, job);
+
+    await waitForFile(playlist, HLS_STARTUP_TIMEOUT_MS, () => job.startupError);
+    if (job.startupError) throw job.startupError;
+    job.ready = true;
     touchHlsJob(item.Id);
+    return playlist;
+  } catch (error) {
+    if (hlsJobs.get(item.Id) === job) stopHlsJob(item.Id, "startup failed");
+    if (!job.child) scheduleHlsCleanup(job, 0);
+    throw error;
   }
-  await waitForFile(playlist);
+}
+
+async function ensureHls(item) {
+  const directory = path.join(HLS_DIR, item.Id);
+  const playlist = path.join(directory, "index.m3u8");
+  const activeJob = hlsJobs.get(item.Id);
+  if (activeJob) {
+    touchHlsJob(item.Id);
+    await activeJob.startPromise;
+    return playlist;
+  }
+  try {
+    await fsp.access(playlist);
+    return playlist;
+  } catch {}
+  const pendingJob = hlsJobs.get(item.Id);
+  if (pendingJob) {
+    touchHlsJob(item.Id);
+    await pendingJob.startPromise;
+    return playlist;
+  }
+  const job = {
+    child: null,
+    directory,
+    playlist,
+    lastAccess: Date.now(),
+    idleTimer: null,
+    cleanupOnClose: false,
+    cleanupScheduled: false,
+    ready: false,
+    startupError: null,
+    startPromise: null,
+  };
+  hlsJobs.set(item.Id, job);
+  job.startPromise = startHlsJob(item, job);
+  await job.startPromise;
   return playlist;
 }
 
