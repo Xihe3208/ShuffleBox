@@ -550,6 +550,11 @@ function takeNextThumbnailJob() {
   const foregroundIndex = thumbnailJobQueue.findIndex(
     (job) => job.state === "queued" && job.priority === "foreground",
   );
+  // Keep one worker available for a foreground request. If older state has
+  // already filled both workers with background jobs, enqueueing foreground
+  // work below will cancel enough background jobs to free that slot.
+  if (foregroundIndex < 0 && activeThumbnailJobs >= THUMBNAIL_MAX_CONCURRENCY - 1)
+    return null;
   const index = foregroundIndex >= 0
     ? foregroundIndex
     : thumbnailJobQueue.findIndex((job) => job.state === "queued");
@@ -559,7 +564,28 @@ function takeNextThumbnailJob() {
 function stopThumbnailJob(job) {
   if (!job) return;
   job.cancelled = true;
-  if (job.child && !job.child.killed) job.child.kill("SIGTERM");
+  if (!job.child || job.child.exitCode !== null) return;
+  job.child.kill("SIGTERM");
+  if (job.cancelTimer) clearTimeout(job.cancelTimer);
+  job.cancelTimer = setTimeout(() => {
+    if (job.child && job.child.exitCode === null) job.child.kill("SIGKILL");
+  }, 1000);
+  job.cancelTimer.unref();
+}
+
+function preemptBackgroundThumbnailJobs() {
+  const foregroundRunning = [...thumbnailJobs.values()].filter(
+    (job) => job.state === "running" && job.priority === "foreground",
+  ).length;
+  const allowedBackground = Math.max(
+    0,
+    THUMBNAIL_MAX_CONCURRENCY - foregroundRunning - 1,
+  );
+  const runningBackground = [...thumbnailJobs.values()].filter(
+    (job) => job.state === "running" && job.priority === "background",
+  );
+  for (const job of runningBackground.slice(allowedBackground))
+    stopThumbnailJob(job);
 }
 
 function pumpThumbnailJobs() {
@@ -571,8 +597,12 @@ function pumpThumbnailJobs() {
     runThumbnailJob(job)
       .then((result) => job.resolve(result))
       .catch((error) => {
-        console.warn(`缩略图生成失败：${error.message}`);
-        job.resolve({ status: "failed" });
+        if (error.code === "THUMBNAIL_CANCELLED") {
+          job.resolve({ status: "cancelled" });
+        } else {
+          console.warn(`缩略图生成失败：${error.message}`);
+          job.resolve({ status: "failed" });
+        }
       })
       .finally(() => {
         activeThumbnailJobs -= 1;
@@ -586,7 +616,10 @@ function enqueueThumbnailJob(context, priority = "foreground") {
   const key = thumbnailJobKey(context);
   const existing = thumbnailJobs.get(key);
   if (existing) {
-    if (priority === "foreground") existing.priority = "foreground";
+    if (priority === "foreground") {
+      existing.priority = "foreground";
+      preemptBackgroundThumbnailJobs();
+    }
     return existing.promise;
   }
   let resolve;
@@ -605,6 +638,7 @@ function enqueueThumbnailJob(context, priority = "foreground") {
   };
   thumbnailJobs.set(key, job);
   thumbnailJobQueue.push(job);
+  if (priority === "foreground") preemptBackgroundThumbnailJobs();
   pumpThumbnailJobs();
   return promise;
 }
@@ -637,12 +671,21 @@ function runFfmpeg(commandArgs, job) {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
+      if (job.cancelTimer) {
+        clearTimeout(job.cancelTimer);
+        job.cancelTimer = null;
+      }
+      job.child = null;
       reject(error);
     });
     child.once("close", (code) => {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
+      if (job.cancelTimer) {
+        clearTimeout(job.cancelTimer);
+        job.cancelTimer = null;
+      }
       job.child = null;
       if (job.cancelled) {
         const error = new Error("缩略图任务已取消");
