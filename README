@@ -36,7 +36,8 @@ ShuffleBox 是一个面向 Debian/Proxmox LXC 的自托管 SMB 媒体播放器�
 在构建机执行：
 
 ```bash
-/opt/ShuffleBox/debian/build-deb.sh /root
+cd /opt/shullfebox/ShuffleBox
+./debian/build-deb.sh /root
 ```
 
 输出示例：`/root/shufflebox_1.1.0-1_all.deb`。安装本地包：
@@ -120,6 +121,29 @@ shufflebox admin-settings false
 - `/emby/Items/<媒体 ID>/Images/Primary`：缩略图访问。
 - `/emby/Videos/<媒体 ID>/stream` 和 `master.m3u8`：视频与 HLS 访问。
 
+缩略图缓存：
+
+- 缓存根目录为 `/var/lib/shufflebox/cache`，按 SMB 源独立保存。例如，源为
+  `192.168.1.51/PronHub` 时，缓存目录类似
+  `192.168.1.51_PronHub_<hash>`。
+- `cache/config.json` 保存源标识与缓存目录的对应关系，便于服务判断和复用正确的
+  缓存；其中不保存 SMB 密码。每个源目录内按照媒体相对路径保留原有目录层级，缩略图
+  使用 WebP，例如 `分类/单集/xxxx.mov.webp`，并伴随校验媒体版本的元数据文件。
+- SMB 扫描完成后会在后台逐项预热缩略图；用户请求尚未缓存的缩略图时，会进入同一队列
+  立即处理。缩略图使用 FFmpeg 生成，最多同时运行 2 个 FFmpeg 任务，前台用户请求优先
+  于后台预热。单张缩略图目标大小不超过 150KB。
+- 缓存总上限为 5GB。达到上限后不再新增缩略图，也不会自动清理旧缓存，管理员需要
+  手动清理。`GET /api/status` 返回 `cacheLimitExceeded` 字段；超限时中文界面提示
+  “缓存超过最大限制”，英文界面提示 “Cache limit exceeded”。
+- 取消 SMB 挂载不会删除缩略图缓存；旧源缓存会保留，重新挂载相同源时可继续使用。
+- 后台预热遇到损坏、不可读取、未完成或其他无法生成缩略图的媒体时，会跳过该媒体并
+  继续处理后续队列项目。
+
+HLS 启动阶段会等待播放列表准备完成后再进入空闲回收计时，避免转码刚启动就被回收而
+导致 `master.m3u8` 请求返回 500。HLS 仍通过
+`/emby/Videos/<媒体 ID>/master.m3u8` 提供访问，分片通过
+`/emby/Videos/<媒体 ID>/hls/<分片文件名>` 提供访问。
+
 ## 一次性旧版迁移
 
 安装 ShuffleBox 前会先停止可识别的旧服务并创建 root-only 备份，备份目录为
@@ -143,6 +167,7 @@ shufflebox admin-settings false
 构建机至少应执行：
 
 ```bash
+./debian/build-deb.sh /root
 dpkg-deb -I /root/shufflebox_1.1.0-1_all.deb
 dpkg-deb -c /root/shufflebox_1.1.0-1_all.deb
 sh -n bin/shufflebox debian/build-deb.sh debian/shufflebox.preinst \
