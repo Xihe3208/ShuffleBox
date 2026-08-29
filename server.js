@@ -23,6 +23,8 @@ const FAVORITES_FILE = path.join(DATA_DIR, "favorites.json");
 const TAGS_FILE = path.join(DATA_DIR, "tags.json");
 const VIDEO_TAGS_FILE = path.join(DATA_DIR, "video-tags.txt");
 const THUMB_DIR = path.join(DATA_DIR, "thumbs");
+const THUMB_CACHE_DIR = path.join(DATA_DIR, "cache");
+const THUMB_CACHE_CONFIG_FILE = path.join(THUMB_CACHE_DIR, "config.json");
 const HLS_DIR = path.join(DATA_DIR, "hls");
 const CREDENTIALS_FILE = path.join(DATA_DIR, ".smb-credentials");
 const VIDEO_EXTENSIONS = new Set([
@@ -78,6 +80,31 @@ let items = [];
 let itemsById = new Map();
 let libraries = [];
 let scanState = { scanning: false, error: "", lastScan: null };
+const THUMBNAIL_CACHE_LIMIT_BYTES = 5 * 1024 ** 3;
+const THUMBNAIL_MAX_BYTES = 150 * 1024;
+const THUMBNAIL_MAX_CONCURRENCY = 2;
+const THUMBNAIL_ENTRY_RESERVATION_BYTES = THUMBNAIL_MAX_BYTES + 1024;
+const THUMBNAIL_JOB_TIMEOUT_MS = 60 * 1000;
+const THUMBNAIL_PREWARM_DELAY_MS = 1000;
+const THUMBNAIL_PREWARM_IDLE_DELAY_MS = 500;
+const THUMBNAIL_PREWARM_STEP_DELAY_MS = 50;
+const THUMBNAIL_TEMP_PREFIX = ".shufflebox-thumb-tmp-";
+let thumbnailCacheConfig = { version: 1, sources: {} };
+let currentThumbnailSource = null;
+let thumbnailCacheBytes = 0;
+let thumbnailCacheReservedBytes = 0;
+let thumbnailCacheLimitExceeded = false;
+let thumbnailCacheRefreshPromise = null;
+let thumbnailCacheConfigWritePromise = Promise.resolve();
+let thumbnailCacheLock = Promise.resolve();
+const thumbnailJobs = new Map();
+const thumbnailJobQueue = [];
+let activeThumbnailJobs = 0;
+let thumbnailPrewarmGeneration = 0;
+let thumbnailPrewarmItems = [];
+let thumbnailPrewarmCursor = 0;
+let thumbnailPrewarmTimer = null;
+let thumbnailPrewarmPausedByLimit = false;
 const HLS_IDLE_TIMEOUT_MS = 5 * 1000;
 const hlsJobs = new Map();
 const PLAYBACK_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -222,6 +249,624 @@ function safeJsonParse(text, fallback) {
   }
 }
 
+function normalizeSmbShare(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "//")
+    .replace(/\/+$/, "");
+  const match = /^\/\/([^/]+)\/(.+)$/.exec(normalized);
+  if (!match) return "";
+  const sharePath = match[2].replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!sharePath) return "";
+  return `//${match[1].toLowerCase()}/${sharePath}`;
+}
+
+function safeCacheSegment(value, fallback = "source") {
+  const safe = String(value || "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^\.+/, "")
+    .replace(/_+/g, "_")
+    .slice(0, 80)
+    .replace(/^[_-]+|[_-]+$/g, "");
+  return safe || fallback;
+}
+
+function thumbnailSourceIdentity() {
+  const share = normalizeSmbShare(config.share);
+  const canonicalSource = share || (MEDIA_PREMOUNTED ? `premounted://${MEDIA_ROOT}` : "");
+  if (!canonicalSource) return null;
+  const sourceId = idFor(`thumbnail-source:${canonicalSource}`);
+  const shareParts = /^\/\/([^/]+)\/(.+)$/.exec(canonicalSource);
+  const label = shareParts
+    ? `${safeCacheSegment(shareParts[1])}_${safeCacheSegment(shareParts[2])}`
+    : "premounted";
+  return {
+    id: sourceId,
+    share: canonicalSource,
+    directory: `${label}_${sourceId}`,
+  };
+}
+
+function normalizeMediaRelativePath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  if (
+    !normalized ||
+    segments.some(
+      (segment) => !segment || segment === "." || segment === ".." || segment.includes("\0"),
+    )
+  )
+    throw new Error("媒体路径无效");
+  return segments.join("/");
+}
+
+function cachePathWithin(root, relativePath) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(root, relativePath);
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${path.sep}`))
+    throw new Error("缩略图缓存路径无效");
+  return resolvedPath;
+}
+
+async function writeJsonAtomically(file, value, mode = 0o600) {
+  const directory = path.dirname(file);
+  await fsp.mkdir(directory, { recursive: true, mode: 0o750 });
+  const temporary = path.join(
+    directory,
+    `${THUMBNAIL_TEMP_PREFIX}${process.pid}-${crypto.randomUUID()}.tmp`,
+  );
+  try {
+    await fsp.writeFile(temporary, JSON.stringify(value, null, 2), { mode });
+    await fsp.chmod(temporary, mode);
+    await fsp.rename(temporary, file);
+    await fsp.chmod(file, mode);
+  } catch (error) {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function loadThumbnailCacheConfig() {
+  try {
+    const parsed = safeJsonParse(await fsp.readFile(THUMB_CACHE_CONFIG_FILE, "utf8"), {});
+    if (parsed && typeof parsed === "object" && parsed.sources && typeof parsed.sources === "object") {
+      thumbnailCacheConfig = { version: 1, sources: parsed.sources };
+    }
+  } catch {}
+}
+
+async function saveThumbnailCacheConfig() {
+  const nextWrite = thumbnailCacheConfigWritePromise.then(() =>
+    writeJsonAtomically(THUMB_CACHE_CONFIG_FILE, thumbnailCacheConfig, 0o600),
+  );
+  thumbnailCacheConfigWritePromise = nextWrite.catch(() => {});
+  return nextWrite;
+}
+
+async function ensureThumbnailSource() {
+  const source = thumbnailSourceIdentity();
+  currentThumbnailSource = source;
+  if (!source) {
+    cancelThumbnailPrewarm();
+    return null;
+  }
+  const sourceDirectory = cachePathWithin(THUMB_CACHE_DIR, source.directory);
+  await fsp.mkdir(sourceDirectory, { recursive: true, mode: 0o750 });
+  const previous = thumbnailCacheConfig.sources[source.id];
+  const next = {
+    share: source.share,
+    directory: source.directory,
+    createdAt: previous?.createdAt || new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+  };
+  thumbnailCacheConfig.sources[source.id] = next;
+  await saveThumbnailCacheConfig();
+  return source;
+}
+
+async function removeThumbnailTemporaryFiles(directory = THUMB_CACHE_DIR) {
+  let entries;
+  try {
+    entries = await fsp.readdir(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await removeThumbnailTemporaryFiles(target);
+    } else if (entry.isFile() && entry.name.startsWith(THUMBNAIL_TEMP_PREFIX)) {
+      await fsp.rm(target, { force: true }).catch(() => {});
+    }
+  }
+}
+
+async function sumThumbnailCacheBytes(directory = THUMB_CACHE_DIR) {
+  let entries;
+  try {
+    entries = await fsp.readdir(directory, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.name.startsWith(THUMBNAIL_TEMP_PREFIX)) continue;
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      total += await sumThumbnailCacheBytes(target);
+    } else if (entry.isFile()) {
+      try {
+        total += (await fsp.stat(target)).size;
+      } catch {}
+    }
+  }
+  return total;
+}
+
+function refreshThumbnailCacheUsage() {
+  if (thumbnailCacheRefreshPromise) return thumbnailCacheRefreshPromise;
+  thumbnailCacheRefreshPromise = sumThumbnailCacheBytes()
+    .then((bytes) => {
+      thumbnailCacheBytes = bytes;
+      if (bytes < THUMBNAIL_CACHE_LIMIT_BYTES) thumbnailCacheLimitExceeded = false;
+      else thumbnailCacheLimitExceeded = true;
+      if (!thumbnailCacheLimitExceeded && thumbnailPrewarmPausedByLimit) {
+        thumbnailPrewarmPausedByLimit = false;
+        scheduleThumbnailPrewarm();
+      }
+      return bytes;
+    })
+    .finally(() => {
+      thumbnailCacheRefreshPromise = null;
+    });
+  return thumbnailCacheRefreshPromise;
+}
+
+function withThumbnailCacheLock(task) {
+  const next = thumbnailCacheLock.then(task, task);
+  thumbnailCacheLock = next.catch(() => {});
+  return next;
+}
+
+async function entryBytes(paths) {
+  let total = 0;
+  for (const file of [paths.target, paths.metadata]) {
+    try {
+      const stat = await fsp.stat(file);
+      if (stat.isFile()) total += stat.size;
+    } catch {}
+  }
+  return total;
+}
+
+async function reserveThumbnailSpace(paths) {
+  return withThumbnailCacheLock(async () => {
+    await refreshThumbnailCacheUsage();
+    const existingBytes = await entryBytes(paths);
+    const reservedBytes = Math.max(
+      0,
+      THUMBNAIL_ENTRY_RESERVATION_BYTES - existingBytes,
+    );
+    if (
+      thumbnailCacheBytes + thumbnailCacheReservedBytes + reservedBytes >
+      THUMBNAIL_CACHE_LIMIT_BYTES
+    ) {
+      thumbnailCacheLimitExceeded = true;
+      return null;
+    }
+    thumbnailCacheReservedBytes += reservedBytes;
+    return { existingBytes, reservedBytes };
+  });
+}
+
+async function releaseThumbnailSpace(paths, reservation) {
+  if (!reservation) return;
+  await withThumbnailCacheLock(async () => {
+    thumbnailCacheReservedBytes = Math.max(
+      0,
+      thumbnailCacheReservedBytes - reservation.reservedBytes,
+    );
+    const currentBytes = await entryBytes(paths);
+    thumbnailCacheBytes = Math.max(
+      0,
+      thumbnailCacheBytes + currentBytes - reservation.existingBytes,
+    );
+    thumbnailCacheLimitExceeded =
+      thumbnailCacheBytes >= THUMBNAIL_CACHE_LIMIT_BYTES;
+  });
+}
+
+function thumbnailEntryPaths(source, relativePath) {
+  const sourceDirectory = cachePathWithin(THUMB_CACHE_DIR, source.directory);
+  const target = cachePathWithin(sourceDirectory, `${relativePath}.webp`);
+  return { target, metadata: `${target}.meta.json` };
+}
+
+async function currentThumbnailContext(item) {
+  if (!currentThumbnailSource) return null;
+  const relativePath = normalizeMediaRelativePath(item.Path);
+  const stat = await fsp.stat(item._absolutePath);
+  const paths = thumbnailEntryPaths(currentThumbnailSource, relativePath);
+  const source = {
+    id: currentThumbnailSource.id,
+    share: currentThumbnailSource.share,
+    relativePath,
+    size: stat.size,
+    mtimeMs: Math.trunc(stat.mtimeMs),
+  };
+  return { item, source, paths };
+}
+
+async function validThumbnail(context) {
+  try {
+    const cacheRoot = await fsp.realpath(THUMB_CACHE_DIR);
+    const cacheParent = await fsp.realpath(path.dirname(context.paths.target));
+    if (
+      cacheParent !== cacheRoot &&
+      !cacheParent.startsWith(`${cacheRoot}${path.sep}`)
+    )
+      return null;
+    const [metadataText, stat, targetLink, metadataLink] = await Promise.all([
+      fsp.readFile(context.paths.metadata, "utf8"),
+      fsp.stat(context.paths.target),
+      fsp.lstat(context.paths.target),
+      fsp.lstat(context.paths.metadata),
+    ]);
+    const metadata = safeJsonParse(metadataText, null);
+    if (
+      !stat.isFile() ||
+      !targetLink.isFile() ||
+      !metadataLink.isFile() ||
+      stat.size <= 0 ||
+      stat.size > THUMBNAIL_MAX_BYTES ||
+      !metadata ||
+      metadata.version !== 1 ||
+      metadata.sourceId !== context.source.id ||
+      metadata.relativePath !== context.source.relativePath ||
+      metadata.size !== context.source.size ||
+      metadata.mtimeMs !== context.source.mtimeMs
+    )
+      return null;
+    return stat;
+  } catch {
+    return null;
+  }
+}
+
+function thumbnailJobKey(context) {
+  return `${context.source.id}\0${context.source.relativePath}`;
+}
+
+function hasForegroundThumbnailWork() {
+  return [...thumbnailJobs.values()].some(
+    (job) => job.priority === "foreground",
+  );
+}
+
+function takeNextThumbnailJob() {
+  const queued = thumbnailJobQueue.filter((job) => job.state === "queued");
+  if (!queued.length) return null;
+  const foregroundIndex = thumbnailJobQueue.findIndex(
+    (job) => job.state === "queued" && job.priority === "foreground",
+  );
+  const index = foregroundIndex >= 0
+    ? foregroundIndex
+    : thumbnailJobQueue.findIndex((job) => job.state === "queued");
+  return thumbnailJobQueue.splice(index, 1)[0] || null;
+}
+
+function stopThumbnailJob(job) {
+  if (!job) return;
+  job.cancelled = true;
+  if (job.child && !job.child.killed) job.child.kill("SIGTERM");
+}
+
+function pumpThumbnailJobs() {
+  while (activeThumbnailJobs < THUMBNAIL_MAX_CONCURRENCY) {
+    const job = takeNextThumbnailJob();
+    if (!job) return;
+    activeThumbnailJobs += 1;
+    job.state = "running";
+    runThumbnailJob(job)
+      .then((result) => job.resolve(result))
+      .catch((error) => {
+        console.warn(`缩略图生成失败：${error.message}`);
+        job.resolve({ status: "failed" });
+      })
+      .finally(() => {
+        activeThumbnailJobs -= 1;
+        thumbnailJobs.delete(job.key);
+        pumpThumbnailJobs();
+      });
+  }
+}
+
+function enqueueThumbnailJob(context, priority = "foreground") {
+  const key = thumbnailJobKey(context);
+  const existing = thumbnailJobs.get(key);
+  if (existing) {
+    if (priority === "foreground") existing.priority = "foreground";
+    return existing.promise;
+  }
+  let resolve;
+  const promise = new Promise((complete) => {
+    resolve = complete;
+  });
+  const job = {
+    key,
+    context,
+    priority,
+    state: "queued",
+    child: null,
+    cancelled: false,
+    resolve,
+    promise,
+  };
+  thumbnailJobs.set(key, job);
+  thumbnailJobQueue.push(job);
+  pumpThumbnailJobs();
+  return promise;
+}
+
+function runFfmpeg(commandArgs, job) {
+  return new Promise((resolve, reject) => {
+    if (job.cancelled) {
+      const error = new Error("缩略图任务已取消");
+      error.code = "THUMBNAIL_CANCELLED";
+      reject(error);
+      return;
+    }
+    const child = spawn("ffmpeg", commandArgs, {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    job.child = child;
+    let errorText = "";
+    let finished = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      if (finished) return;
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, THUMBNAIL_JOB_TIMEOUT_MS);
+    timeout.unref();
+    child.stderr.on("data", (chunk) => {
+      errorText = (errorText + chunk).slice(-2000);
+    });
+    child.once("error", (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      job.child = null;
+      if (job.cancelled) {
+        const error = new Error("缩略图任务已取消");
+        error.code = "THUMBNAIL_CANCELLED";
+        reject(error);
+      } else if (timedOut) {
+        const error = new Error("缩略图生成超时");
+        error.code = "THUMBNAIL_TIMEOUT";
+        reject(error);
+      } else if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(errorText.trim() || `ffmpeg exited with ${code}`));
+      }
+    });
+  });
+}
+
+async function encodeThumbnail(context, job, temporary) {
+  const attempts = [
+    { width: 480, quality: 65 },
+    { width: 360, quality: 50 },
+    { width: 320, quality: 35 },
+  ];
+  for (const attempt of attempts) {
+    await fsp.rm(temporary, { force: true });
+    await runFfmpeg(
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-ss",
+        "3",
+        "-i",
+        context.item._absolutePath,
+        "-frames:v",
+        "1",
+        "-vf",
+        `scale=${attempt.width}:-2`,
+        "-c:v",
+        "libwebp",
+        "-q:v",
+        String(attempt.quality),
+        "-compression_level",
+        "6",
+        "-preset",
+        "picture",
+        "-an",
+        "-f",
+        "webp",
+        "-y",
+        temporary,
+      ],
+      job,
+    );
+    const stat = await fsp.stat(temporary);
+    if (stat.isFile() && stat.size > 0 && stat.size <= THUMBNAIL_MAX_BYTES)
+      return stat.size;
+  }
+  throw new Error("缩略图超过大小限制");
+}
+
+async function runThumbnailJob(job) {
+  const context = await currentThumbnailContext(job.context.item);
+  if (!context || context.source.id !== job.context.source.id)
+    return { status: "unavailable" };
+  if (await validThumbnail(context)) return { status: "cached" };
+  if (!(await isMounted())) return { status: "unavailable" };
+
+  const reservation = await reserveThumbnailSpace(context.paths);
+  if (!reservation) return { status: "limit" };
+  const temporary = path.join(
+    path.dirname(context.paths.target),
+    `${THUMBNAIL_TEMP_PREFIX}${process.pid}-${crypto.randomUUID()}.webp`,
+  );
+  let committed = false;
+  let targetRenamed = false;
+  try {
+    if (job.cancelled) return { status: "cancelled" };
+    await fsp.mkdir(path.dirname(context.paths.target), {
+      recursive: true,
+      mode: 0o750,
+    });
+    const cacheRoot = await fsp.realpath(THUMB_CACHE_DIR);
+    const cacheParent = await fsp.realpath(path.dirname(context.paths.target));
+    if (
+      cacheParent !== cacheRoot &&
+      !cacheParent.startsWith(`${cacheRoot}${path.sep}`)
+    )
+      throw new Error("缩略图缓存路径无效");
+    await encodeThumbnail(context, job, temporary);
+    if (job.cancelled) return { status: "cancelled" };
+    const latestStat = await fsp.stat(context.item._absolutePath);
+    if (
+      latestStat.size !== context.source.size ||
+      Math.trunc(latestStat.mtimeMs) !== context.source.mtimeMs
+    )
+      return { status: "changed" };
+    await fsp.chmod(temporary, 0o640);
+    await fsp.rename(temporary, context.paths.target);
+    targetRenamed = true;
+    await writeJsonAtomically(
+      context.paths.metadata,
+      {
+        version: 1,
+        sourceId: context.source.id,
+        relativePath: context.source.relativePath,
+        size: context.source.size,
+        mtimeMs: context.source.mtimeMs,
+      },
+      0o640,
+    );
+    committed = true;
+    return { status: "generated" };
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+    if (!committed && targetRenamed) {
+      // The target is only renamed immediately before its metadata is written;
+      // remove that incomplete pair so it can never be served as a cache hit.
+      await fsp.rm(context.paths.target, { force: true }).catch(() => {});
+    }
+    await releaseThumbnailSpace(context.paths, reservation);
+  }
+}
+
+function cancelThumbnailPrewarm() {
+  thumbnailPrewarmGeneration += 1;
+  thumbnailPrewarmItems = [];
+  thumbnailPrewarmCursor = 0;
+  thumbnailPrewarmPausedByLimit = false;
+  if (thumbnailPrewarmTimer) {
+    clearTimeout(thumbnailPrewarmTimer);
+    thumbnailPrewarmTimer = null;
+  }
+  for (const job of [...thumbnailJobs.values()]) {
+    if (job.priority === "background") stopThumbnailJob(job);
+  }
+  for (let index = thumbnailJobQueue.length - 1; index >= 0; index -= 1) {
+    const job = thumbnailJobQueue[index];
+    if (job.priority !== "background") continue;
+    thumbnailJobQueue.splice(index, 1);
+    thumbnailJobs.delete(job.key);
+    job.state = "cancelled";
+    job.resolve({ status: "cancelled" });
+  }
+}
+
+function scheduleThumbnailPrewarm() {
+  if (!currentThumbnailSource || !items.length) {
+    cancelThumbnailPrewarm();
+    return;
+  }
+  thumbnailPrewarmGeneration += 1;
+  const generation = thumbnailPrewarmGeneration;
+  thumbnailPrewarmItems = [...items];
+  thumbnailPrewarmCursor = 0;
+  thumbnailPrewarmPausedByLimit = false;
+  if (thumbnailPrewarmTimer) clearTimeout(thumbnailPrewarmTimer);
+  thumbnailPrewarmTimer = setTimeout(
+    () => runThumbnailPrewarm(generation),
+    THUMBNAIL_PREWARM_DELAY_MS,
+  );
+  thumbnailPrewarmTimer.unref();
+}
+
+async function runThumbnailPrewarm(generation) {
+  thumbnailPrewarmTimer = null;
+  if (
+    generation !== thumbnailPrewarmGeneration ||
+    !currentThumbnailSource ||
+    thumbnailPrewarmCursor >= thumbnailPrewarmItems.length
+  )
+    return;
+  if (!(await isMounted())) return;
+  await refreshThumbnailCacheUsage();
+  if (thumbnailCacheLimitExceeded) {
+    thumbnailPrewarmPausedByLimit = true;
+    return;
+  }
+  if (hasForegroundThumbnailWork()) {
+    thumbnailPrewarmTimer = setTimeout(
+      () => runThumbnailPrewarm(generation),
+      THUMBNAIL_PREWARM_IDLE_DELAY_MS,
+    );
+    thumbnailPrewarmTimer.unref();
+    return;
+  }
+  const item = thumbnailPrewarmItems[thumbnailPrewarmCursor];
+  let context;
+  try {
+    context = await currentThumbnailContext(item);
+  } catch {
+    return;
+  }
+  if (generation !== thumbnailPrewarmGeneration) return;
+  if (await validThumbnail(context)) {
+    thumbnailPrewarmCursor += 1;
+  } else {
+    const result = await enqueueThumbnailJob(context, "background");
+    if (generation !== thumbnailPrewarmGeneration) return;
+    if (result.status === "limit") {
+      thumbnailPrewarmPausedByLimit = true;
+      return;
+    }
+    if (["unavailable", "failed", "changed"].includes(result.status)) return;
+    thumbnailPrewarmCursor += 1;
+  }
+  if (thumbnailPrewarmCursor < thumbnailPrewarmItems.length) {
+    thumbnailPrewarmTimer = setTimeout(
+      () => runThumbnailPrewarm(generation),
+      THUMBNAIL_PREWARM_STEP_DELAY_MS,
+    );
+    thumbnailPrewarmTimer.unref();
+  }
+}
+
+const thumbnailCacheRefreshTimer = setInterval(() => {
+  refreshThumbnailCacheUsage().catch((error) =>
+    console.warn(`缩略图缓存检查失败：${error.message}`),
+  );
+}, 30 * 1000);
+thumbnailCacheRefreshTimer.unref();
+
 // Build a deterministic random stream for one shuffle session.  The client
 // reuses the same seed while paging, so every page is a slice of one stable
 // permutation instead of a fresh shuffle with duplicates and omissions.
@@ -277,11 +922,15 @@ async function ensureDataDirs() {
   await fsp.mkdir(DATA_DIR, { recursive: true });
   await fsp.mkdir(MEDIA_ROOT, { recursive: true });
   await fsp.mkdir(THUMB_DIR, { recursive: true });
+  await fsp.mkdir(THUMB_CACHE_DIR, { recursive: true, mode: 0o750 });
   await fsp.mkdir(HLS_DIR, { recursive: true });
 }
 
 async function loadState() {
   await ensureDataDirs();
+  await removeThumbnailTemporaryFiles();
+  await loadThumbnailCacheConfig();
+  await refreshThumbnailCacheUsage();
   try {
     config = {
       ...config,
@@ -405,6 +1054,8 @@ async function isMounted() {
 }
 
 async function unmountShare() {
+  cancelThumbnailPrewarm();
+  currentThumbnailSource = null;
   if (MEDIA_PREMOUNTED || !(await isMounted())) return;
   try {
     await run("umount", [MEDIA_ROOT]);
@@ -527,6 +1178,12 @@ async function scanLibrary() {
       a.Name.localeCompare(b.Name, "zh-CN"),
     );
     scanState.lastScan = new Date().toISOString();
+    try {
+      await ensureThumbnailSource();
+      scheduleThumbnailPrewarm();
+    } catch (error) {
+      console.warn(`缩略图缓存初始化失败：${error.message}`);
+    }
   } catch (error) {
     scanState.error = error.message;
     throw error;
@@ -569,6 +1226,7 @@ function publicConfig() {
     deleteMode: Boolean(config.deleteMode),
     mounted: MEDIA_PREMOUNTED ? true : undefined,
     itemCount: items.length,
+    cacheLimitExceeded: thumbnailCacheLimitExceeded,
     ...scanState,
   };
 }
@@ -723,43 +1381,55 @@ async function serveVideo(req, res, item, url) {
   );
 }
 
-async function serveThumbnail(res, item) {
-  const target = path.join(THUMB_DIR, `${item.Id}.jpg`);
-  try {
-    await fsp.access(target);
-  } catch {
-    try {
-      await run("ffmpeg", [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        "3",
-        "-i",
-        item._absolutePath,
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale=480:-2",
-        "-q:v",
-        "4",
-        "-y",
-        target,
-      ]);
-    } catch {
-      const fallback = path.join(STATIC_ROOT, "poster.webp");
-      res.writeHead(302, { Location: "/poster.webp" });
-      res.end();
-      return;
-    }
-  }
-  const stat = await fsp.stat(target);
+function redirectToThumbnailPlaceholder(res) {
+  if (thumbnailCacheLimitExceeded)
+    res.setHeader("X-ShuffleBox-Cache-Limit", "exceeded");
+  res.writeHead(302, { Location: "/poster.webp" });
+  res.end();
+}
+
+async function serveCachedThumbnail(res, context, stat) {
+  if (thumbnailCacheLimitExceeded)
+    res.setHeader("X-ShuffleBox-Cache-Limit", "exceeded");
   res.writeHead(200, {
-    "Content-Type": "image/jpeg",
+    "Content-Type": "image/webp",
     "Content-Length": stat.size,
     "Cache-Control": "public, max-age=2592000",
   });
-  fs.createReadStream(target).pipe(res);
+  const stream = fs.createReadStream(context.paths.target);
+  stream.on("error", (error) => {
+    if (!res.headersSent) res.destroy(error);
+    else res.destroy();
+  });
+  stream.pipe(res);
+}
+
+async function serveThumbnail(res, item) {
+  let context;
+  try {
+    context = await currentThumbnailContext(item);
+  } catch {
+    redirectToThumbnailPlaceholder(res);
+    return;
+  }
+  if (!context) {
+    redirectToThumbnailPlaceholder(res);
+    return;
+  }
+  let stat = await validThumbnail(context);
+  if (!stat) {
+    const result = await enqueueThumbnailJob(context, "foreground");
+    if (result.status !== "generated" && result.status !== "cached") {
+      redirectToThumbnailPlaceholder(res);
+      return;
+    }
+    stat = await validThumbnail(context);
+  }
+  if (!stat) {
+    redirectToThumbnailPlaceholder(res);
+    return;
+  }
+  await serveCachedThumbnail(res, context, stat);
 }
 
 async function probeItem(item) {
@@ -902,6 +1572,7 @@ async function ensureHls(item) {
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
     for (const itemId of [...hlsJobs.keys()]) stopHlsJob(itemId, signal);
+    for (const job of thumbnailJobs.values()) stopThumbnailJob(job);
     process.exit(0);
   });
 }
