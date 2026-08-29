@@ -994,6 +994,12 @@
           this.feedActiveIndex = null;
           this.feedActivationToken = 0;
           this.feedObserverThreshold = 0.75;
+          this.feedWindowRadius = 3;
+          this.feedCanvas = null;
+          this.feedWindowStart = 0;
+          this.feedWindowEnd = -1;
+          this.feedViewportHeight = 0;
+          this._feedResizeHandler = null;
 
           this.dom = {}; // DOM 元素缓存
           this.config.deviceName = this.getDeviceName();
@@ -1645,6 +1651,10 @@
           // 重置页面滚动（防止 scrollIntoView 污染 html.scrollTop 导致标题栏错位）
           document.documentElement.scrollTop = 0;
           container.innerHTML = "";
+          this.feedCanvas = null;
+          this.feedWindowStart = 0;
+          this.feedWindowEnd = -1;
+          this.feedViewportHeight = 0;
           // 完全重置为绝对定位的、可滚动的原生网格层
           container.className =
             "absolute inset-0 z-10 bg-black/40 overflow-hidden flex flex-col";
@@ -1909,17 +1919,20 @@
           const container = this.dom.videoContainer;
           container.className =
             "relative w-full h-full flex flex-col overflow-y-auto overscroll-y-contain snap-y snap-mandatory feed-scrollbar-hidden";
+          container.querySelectorAll("video").forEach((video) =>
+            this.releaseVideoElement(video),
+          );
           container.innerHTML = "";
           this.feedActivationToken += 1;
           this.state.isPlaying = false;
           this.feedActiveIndex = null;
           this.feedIntersectionRatios.clear();
+          this.feedCanvas = null;
+          this.feedWindowStart = 0;
+          this.feedWindowEnd = -1;
+          this.feedViewportHeight = 0;
 
-          const fragment = document.createDocumentFragment();
-          this.state.videos.forEach((video, index) => {
-            fragment.appendChild(this.createFeedItem(video, index));
-          });
-          container.appendChild(fragment);
+          this.renderFeedWindow(this.state.currentIndex, true);
 
           this.setupFeedObserver();
           this.updateFeedPosterLoading(this.state.currentIndex);
@@ -1967,6 +1980,142 @@
           return item;
         }
 
+        getFeedViewportHeight() {
+          return Math.max(
+            1,
+            this.dom.videoContainer?.clientHeight ||
+              this.feedViewportHeight ||
+              window.innerHeight ||
+              1,
+          );
+        }
+
+        getFeedItemKey(video, index) {
+          return video?.Id
+            ? "id:" + String(video.Id)
+            : "index:" + String(index);
+        }
+
+        positionFeedItem(item, index, viewportHeight) {
+          item.style.position = "absolute";
+          item.style.left = "0";
+          item.style.top = index * viewportHeight + "px";
+          item.style.width = "100%";
+          item.style.height = viewportHeight + "px";
+        }
+
+        removeFeedItem(item) {
+          if (!item) return;
+          this.feedObserver?.unobserve(item);
+          item.removeAttribute("data-observed");
+          const video = item.querySelector("video");
+          if (video) this.releaseVideoElement(video);
+          item.remove();
+        }
+
+        renderFeedWindow(centerIndex = this.state.currentIndex, force = false) {
+          if (this.state.viewMode !== "stream") return false;
+
+          const container = this.dom.videoContainer;
+          const total = this.state.videos.length;
+          if (!total) {
+            container.innerHTML = "";
+            this.feedCanvas = null;
+            this.feedWindowStart = 0;
+            this.feedWindowEnd = -1;
+            this.feedViewportHeight = 0;
+            return false;
+          }
+
+          const viewportHeight = this.getFeedViewportHeight();
+          const maxWindowSize = this.feedWindowRadius * 2 + 1;
+          const windowSize = Math.min(total, maxWindowSize);
+          const maxStart = Math.max(0, total - windowSize);
+          const safeCenter = Math.max(
+            0,
+            Math.min(total - 1, Number(centerIndex) || 0),
+          );
+          const windowStart = Math.min(
+            Math.max(0, safeCenter - this.feedWindowRadius),
+            maxStart,
+          );
+          const windowEnd = Math.min(total - 1, windowStart + windowSize - 1);
+          const windowChanged =
+            force ||
+            !this.feedCanvas ||
+            this.feedWindowStart !== windowStart ||
+            this.feedWindowEnd !== windowEnd;
+          const viewportChanged = this.feedViewportHeight !== viewportHeight;
+
+          if (!windowChanged && !viewportChanged) return false;
+
+          if (!this.feedCanvas) {
+            this.feedCanvas = document.createElement("div");
+            this.feedCanvas.className = "feed-canvas relative w-full shrink-0";
+            this.feedCanvas.style.position = "relative";
+            this.feedCanvas.style.width = "100%";
+            this.feedCanvas.style.flexShrink = "0";
+            container.appendChild(this.feedCanvas);
+          }
+
+          this.feedCanvas.style.height = total * viewportHeight + "px";
+          this.feedViewportHeight = viewportHeight;
+
+          const desiredIndexes = new Set();
+          for (let index = windowStart; index <= windowEnd; index += 1) {
+            desiredIndexes.add(index);
+          }
+
+          if (
+            this.feedActiveIndex !== null &&
+            !desiredIndexes.has(this.feedActiveIndex)
+          ) {
+            const activeVideo = this.getVideoElement(this.feedActiveIndex);
+            if (activeVideo) {
+              this.reportPlayback("stopped", activeVideo);
+              this.deactivateFeedItem(this.feedActiveIndex);
+            }
+            this.feedActivationToken += 1;
+            this.feedActiveIndex = null;
+            this.state.isPlaying = false;
+          }
+
+          const existingItems = [
+            ...this.feedCanvas.querySelectorAll(".slide-item"),
+          ];
+          const itemsByKey = new Map();
+          existingItems.forEach((item) => {
+            const index = Number(item.dataset.index);
+            const key = item.dataset.id
+              ? "id:" + item.dataset.id
+              : "index:" + String(index);
+            itemsByKey.set(key, item);
+          });
+
+          const desiredItems = new Set();
+          for (let index = windowStart; index <= windowEnd; index += 1) {
+            const video = this.state.videos[index];
+            const key = this.getFeedItemKey(video, index);
+            const item =
+              itemsByKey.get(key) || this.createFeedItem(video, index);
+            this.setFeedItemIndex(item, index);
+            item.dataset.id = String(video.Id || "");
+            this.positionFeedItem(item, index, viewportHeight);
+            desiredItems.add(item);
+            this.feedCanvas.appendChild(item);
+          }
+
+          existingItems.forEach((item) => {
+            if (!desiredItems.has(item)) this.removeFeedItem(item);
+          });
+
+          this.feedWindowStart = windowStart;
+          this.feedWindowEnd = windowEnd;
+          if (windowChanged) this.feedIntersectionRatios.clear();
+          this.observeFeedItems();
+          return true;
+        }
+
         updateFeedPosterLoading(centerIndex = this.state.currentIndex) {
           if (this.state.viewMode !== "stream") return;
           const keepIndexes = new Set(
@@ -2005,22 +2154,8 @@
 
         appendFeedItems(videos, startIndex) {
           if (this.state.viewMode !== "stream") return;
-          const fragment = document.createDocumentFragment();
-          videos.forEach((video, offset) => {
-            fragment.appendChild(this.createFeedItem(video, startIndex + offset));
-          });
-          this.dom.videoContainer.appendChild(fragment);
+          this.renderFeedWindow(this.state.currentIndex);
           this.updateFeedPosterLoading(this.state.currentIndex);
-          if (this.feedObserver) {
-            this.dom.videoContainer
-              .querySelectorAll(".slide-item")
-              .forEach((item) => {
-                if (!item.dataset.observed) {
-                  this.feedObserver.observe(item);
-                  item.dataset.observed = "true";
-                }
-              });
-          }
           lucide.createIcons();
         }
 
@@ -2049,33 +2184,96 @@
             );
             this._feedScrollHandler = null;
           }
+          if (this._feedScrollFrame) {
+            cancelAnimationFrame(this._feedScrollFrame);
+            this._feedScrollFrame = null;
+          }
+          if (this._feedResizeHandler) {
+            window.removeEventListener("resize", this._feedResizeHandler);
+            this._feedResizeHandler = null;
+          }
+        }
+
+        updateFeedActiveFromRatios() {
+          let bestIndex = null;
+          let bestRatio = this.feedObserverThreshold;
+          this.feedIntersectionRatios.forEach((ratio, index) => {
+            if (
+              ratio >= bestRatio &&
+              (bestIndex === null || ratio > bestRatio)
+            ) {
+              bestIndex = index;
+              bestRatio = ratio;
+            }
+          });
+
+          if (bestIndex === null) {
+            if (this.feedActiveIndex !== null) {
+              this.feedActivationToken += 1;
+              this.deactivateFeedItem(this.feedActiveIndex);
+              this.feedActiveIndex = null;
+              this.state.isPlaying = false;
+            }
+            return;
+          }
+          if (this.feedActiveIndex !== bestIndex)
+            this.activateFeedItem(bestIndex);
+        }
+
+        updateFeedFallbackVisibility() {
+          const container = this.dom.videoContainer;
+          const root = container.getBoundingClientRect();
+          this.feedIntersectionRatios.clear();
+          container.querySelectorAll(".slide-item").forEach((item) => {
+            const rect = item.getBoundingClientRect();
+            const visible = Math.max(
+              0,
+              Math.min(rect.bottom, root.bottom) -
+                Math.max(rect.top, root.top),
+            );
+            const ratio = rect.height ? visible / rect.height : 0;
+            if (ratio >= this.feedObserverThreshold)
+              this.feedIntersectionRatios.set(
+                Number(item.dataset.index),
+                ratio,
+              );
+          });
+          this.updateFeedActiveFromRatios();
+        }
+
+        updateFeedWindowForScroll() {
+          if (this.state.viewMode !== "stream") return;
+          const container = this.dom.videoContainer;
+          const total = this.state.videos.length;
+          if (!total) return;
+
+          const previousHeight = this.feedViewportHeight || this.getFeedViewportHeight();
+          const currentHeight = this.getFeedViewportHeight();
+          const centerIndex = Math.max(
+            0,
+            Math.min(
+              total - 1,
+              Math.round(container.scrollTop / previousHeight),
+            ),
+          );
+          this.renderFeedWindow(centerIndex, currentHeight !== previousHeight);
+          if (currentHeight !== previousHeight) {
+            container.scrollTop = centerIndex * currentHeight;
+          }
+        }
+
+        scheduleFeedWindowUpdate() {
+          if (this._feedScrollFrame) return;
+          this._feedScrollFrame = requestAnimationFrame(() => {
+            this._feedScrollFrame = null;
+            this.updateFeedWindowForScroll();
+            if (!this.feedObserver) this.updateFeedFallbackVisibility();
+          });
         }
 
         setupFeedObserver() {
           this.disconnectFeedObserver();
           const container = this.dom.videoContainer;
-          const updateActiveFromRatios = () => {
-            let bestIndex = null;
-            let bestRatio = this.feedObserverThreshold;
-            this.feedIntersectionRatios.forEach((ratio, index) => {
-              if (ratio >= bestRatio && (bestIndex === null || ratio > bestRatio)) {
-                bestIndex = index;
-                bestRatio = ratio;
-              }
-            });
-
-            if (bestIndex === null) {
-              if (this.feedActiveIndex !== null) {
-                this.feedActivationToken += 1;
-                this.deactivateFeedItem(this.feedActiveIndex);
-                this.feedActiveIndex = null;
-                this.state.isPlaying = false;
-              }
-              return;
-            }
-            if (this.feedActiveIndex !== bestIndex)
-              this.activateFeedItem(bestIndex);
-          };
 
           if ("IntersectionObserver" in window) {
             this.feedObserver = new IntersectionObserver(
@@ -2091,53 +2289,31 @@
                     this.feedIntersectionRatios.set(index, ratio);
                   else this.feedIntersectionRatios.delete(index);
                 });
-                updateActiveFromRatios();
+                this.updateFeedActiveFromRatios();
               },
               {
                 root: container,
                 threshold: [0, this.feedObserverThreshold],
               },
             );
-            container
-              .querySelectorAll(".slide-item")
-              .forEach((item) => {
-                this.feedObserver.observe(item);
-                item.dataset.observed = "true";
-              });
-          } else {
-            this._feedScrollHandler = () => {
-              if (this._feedScrollFrame) return;
-              this._feedScrollFrame = requestAnimationFrame(() => {
-                this._feedScrollFrame = null;
-                const root = container.getBoundingClientRect();
-                this.feedIntersectionRatios.clear();
-                container.querySelectorAll(".slide-item").forEach((item) => {
-                  const rect = item.getBoundingClientRect();
-                  const visible = Math.max(
-                    0,
-                    Math.min(rect.bottom, root.bottom) -
-                      Math.max(rect.top, root.top),
-                  );
-                  const ratio = rect.height ? visible / rect.height : 0;
-                  if (ratio >= this.feedObserverThreshold)
-                    this.feedIntersectionRatios.set(
-                      Number(item.dataset.index),
-                      ratio,
-                    );
-                });
-                updateActiveFromRatios();
-              });
-            };
-            container.addEventListener("scroll", this._feedScrollHandler, {
-              passive: true,
-            });
+            this.observeFeedItems();
           }
+
+          this._feedScrollHandler = () => this.scheduleFeedWindowUpdate();
+          container.addEventListener("scroll", this._feedScrollHandler, {
+            passive: true,
+          });
+          this._feedResizeHandler = () => this.scheduleFeedWindowUpdate();
+          window.addEventListener("resize", this._feedResizeHandler, {
+            passive: true,
+          });
 
           requestAnimationFrame(() => {
             if (this.state.viewMode === "stream") {
-              const current = this.getFeedItem(this.state.currentIndex);
-              current?.scrollIntoView({ behavior: "auto", block: "start" });
-              if (!this.feedObserver) this._feedScrollHandler?.();
+              const currentHeight = this.getFeedViewportHeight();
+              container.scrollTop = this.state.currentIndex * currentHeight;
+              this.updateFeedWindowForScroll();
+              if (!this.feedObserver) this.updateFeedFallbackVisibility();
             }
           });
         }
@@ -2357,29 +2533,15 @@
             firstIndex === secondIndex
           )
             return;
-          const first = this.getFeedItem(firstIndex);
-          const second = this.getFeedItem(secondIndex);
-          if (!first || !second || first.parentElement !== second.parentElement)
-            return;
-          const parent = first.parentElement;
-          const marker = document.createComment("feed-swap");
-          parent.insertBefore(marker, first);
-          parent.insertBefore(first, second);
-          parent.insertBefore(second, marker);
-          marker.remove();
-          this.setFeedItemIndex(first, secondIndex);
-          this.setFeedItemIndex(second, firstIndex);
-          const currentRatio = this.feedIntersectionRatios.get(
-            this.feedActiveIndex,
-          );
-          this.feedIntersectionRatios.clear();
-          if (this.feedActiveIndex !== null && currentRatio !== undefined)
-            this.feedIntersectionRatios.set(this.feedActiveIndex, currentRatio);
+          this.renderFeedWindow(this.state.currentIndex, true);
+          this.updateFeedPosterLoading(this.state.currentIndex);
         }
 
         setFeedItemIndex(item, index) {
           item.dataset.index = String(index);
           item.setAttribute("aria-label", "视频 " + (index + 1));
+          const video = item.querySelector("video");
+          if (video) video.dataset.index = String(index);
           ["thumb-", "poster-", "overlay-", "video-p", "playBtn-"].forEach(
             (prefix) => {
               const element = item.querySelector("[id^='" + prefix + "']");
@@ -2390,25 +2552,17 @@
 
         syncFeedItemsToState() {
           if (this.state.viewMode !== "stream") return;
-          const currentItems = [
-            ...this.dom.videoContainer.querySelectorAll(".slide-item"),
-          ];
-          if (!currentItems.length) return;
-          const byId = new Map(
-            currentItems.map((item) => [String(item.dataset.id), item]),
-          );
-          const fragment = document.createDocumentFragment();
-          this.state.videos.forEach((video, index) => {
-            const item =
-              byId.get(String(video.Id)) || this.createFeedItem(video, index);
-            this.setFeedItemIndex(item, index);
-            item.dataset.id = String(video.Id || "");
-            fragment.appendChild(item);
-          });
-          this.dom.videoContainer.appendChild(fragment);
-          this.setupFeedObserver();
+          this.renderFeedWindow(this.state.currentIndex, true);
           this.updateFeedPosterLoading(this.state.currentIndex);
           this.updateUI();
+        }
+
+        observeFeedItems() {
+          if (!this.feedObserver || !this.feedCanvas) return;
+          this.feedCanvas.querySelectorAll(".slide-item").forEach((item) => {
+            this.feedObserver.observe(item);
+            item.dataset.observed = "true";
+          });
         }
 
         armAutoplayUnlock() {
@@ -2592,6 +2746,7 @@
           )
             return;
 
+          this.renderFeedWindow(newIndex);
           const target = this.getFeedItem(newIndex);
           if (!target) return;
           if (
@@ -3364,15 +3519,16 @@
           this.state.isScaleFill = false;
           localStorage.setItem("shufflebox_is_scale_fill", this.state.isScaleFill);
           const videos = document.querySelectorAll(".video-fullscreen");
-          videos.forEach((v, index) => {
+          videos.forEach((v) => {
+            const item = v.closest(".slide-item");
             v.classList.remove("object-cover", "object-contain");
             v.classList.add(
               this.state.isScaleFill ? "object-cover" : "object-contain",
             );
 
-            const thumb = document.getElementById(`thumb-${index}`);
-            const poster = document.getElementById(`poster-${index}`);
-            const overlay = document.getElementById(`overlay-${index}`);
+            const thumb = item?.querySelector("img");
+            const poster = item?.querySelector("[data-feed-poster]");
+            const overlay = item?.querySelector("[id^='overlay-']");
             if (this.state.isScaleFill) {
               // cover 模式：显示封面缩略图，隐藏模糊背景
               if (thumb) thumb.style.opacity = "1";
