@@ -2748,7 +2748,11 @@
 
           this.renderFeedWindow(newIndex);
           const target = this.getFeedItem(newIndex);
-          if (!target) return;
+          const viewportHeight =
+            this.feedViewportHeight || this.getFeedViewportHeight();
+          const targetTop = target
+            ? target.offsetTop
+            : newIndex * viewportHeight;
           if (
             newIndex >= this.state.videos.length - 5 &&
             this.state.videos.length < (this.state.totalCount || 999999)
@@ -2767,7 +2771,7 @@
             }
           }
           this.dom.videoContainer.scrollTo({
-            top: target.offsetTop,
+            top: targetTop,
             behavior: "smooth",
           });
           this.updateFeedPosterLoading(newIndex);
