@@ -875,6 +875,19 @@ function scheduleThumbnailPrewarm() {
   thumbnailPrewarmTimer.unref();
 }
 
+function scheduleNextThumbnailPrewarm(generation, delay) {
+  if (
+    generation !== thumbnailPrewarmGeneration ||
+    thumbnailPrewarmCursor >= thumbnailPrewarmItems.length
+  )
+    return;
+  thumbnailPrewarmTimer = setTimeout(
+    () => runThumbnailPrewarm(generation),
+    delay,
+  );
+  thumbnailPrewarmTimer.unref();
+}
+
 async function runThumbnailPrewarm(generation) {
   thumbnailPrewarmTimer = null;
   if (
@@ -890,11 +903,7 @@ async function runThumbnailPrewarm(generation) {
     return;
   }
   if (hasForegroundThumbnailWork()) {
-    thumbnailPrewarmTimer = setTimeout(
-      () => runThumbnailPrewarm(generation),
-      THUMBNAIL_PREWARM_IDLE_DELAY_MS,
-    );
-    thumbnailPrewarmTimer.unref();
+    scheduleNextThumbnailPrewarm(generation, THUMBNAIL_PREWARM_IDLE_DELAY_MS);
     return;
   }
   const item = thumbnailPrewarmItems[thumbnailPrewarmCursor];
@@ -902,9 +911,18 @@ async function runThumbnailPrewarm(generation) {
   try {
     context = await currentThumbnailContext(item);
   } catch {
+    if (generation !== thumbnailPrewarmGeneration) return;
+    thumbnailPrewarmCursor += 1;
+    scheduleNextThumbnailPrewarm(generation, THUMBNAIL_PREWARM_STEP_DELAY_MS);
     return;
   }
-  if (generation !== thumbnailPrewarmGeneration) return;
+  if (
+    generation !== thumbnailPrewarmGeneration ||
+    !context ||
+    !currentThumbnailSource ||
+    context.source.id !== currentThumbnailSource.id
+  )
+    return;
   if (await validThumbnail(context)) {
     thumbnailPrewarmCursor += 1;
   } else {
@@ -914,16 +932,9 @@ async function runThumbnailPrewarm(generation) {
       thumbnailPrewarmPausedByLimit = true;
       return;
     }
-    if (["unavailable", "failed", "changed"].includes(result.status)) return;
     thumbnailPrewarmCursor += 1;
   }
-  if (thumbnailPrewarmCursor < thumbnailPrewarmItems.length) {
-    thumbnailPrewarmTimer = setTimeout(
-      () => runThumbnailPrewarm(generation),
-      THUMBNAIL_PREWARM_STEP_DELAY_MS,
-    );
-    thumbnailPrewarmTimer.unref();
-  }
+  scheduleNextThumbnailPrewarm(generation, THUMBNAIL_PREWARM_STEP_DELAY_MS);
 }
 
 const thumbnailCacheRefreshTimer = setInterval(() => {
