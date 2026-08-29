@@ -938,6 +938,9 @@
           this.feedWindowEnd = -1;
           this.feedViewportHeight = 0;
           this._feedResizeHandler = null;
+          this.cacheStatusTimer = null;
+          this.cacheLimitExceeded = null;
+          this.cacheStatusVisibilityHandler = null;
 
           this.dom = {};
           this.config.deviceName = this.getDeviceName();
@@ -1038,9 +1041,12 @@
 
           lucide.createIcons();
 
-          this.restoreMediaPreferences().finally(() => fetch("/api/status")
+          this.restoreMediaPreferences().finally(() => {
+            this.startCacheLimitStatusPolling();
+            return fetch("/api/status")
             .then((res) => res.json())
             .then((status) => {
+              this.updateCacheLimitStatus(status);
               if (status.configured && !status.error) {
                 this.fetchVideos(
                   this.state.currentLibraryId,
@@ -1057,7 +1063,8 @@
             .catch(() => {
               this.showToast("Cannot connect to the ShuffleBox SMB backend");
               setTimeout(() => this.toggleModal("profilePage", true), 500);
-            }));
+            });
+          });
 
           // ─── Branding Egg ───
           console.log(
@@ -1065,6 +1072,43 @@
             "background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px 0 0 4px;font-weight:bold;",
             "background:#1e293b;color:#fff;padding:2px 6px;border-radius:0 4px 4px 0;",
             "background:transparent",
+          );
+        }
+
+        updateCacheLimitStatus(status) {
+          if (!status || typeof status.cacheLimitExceeded !== "boolean") return;
+          const exceeded = status.cacheLimitExceeded;
+          if (exceeded && this.cacheLimitExceeded !== true) {
+            this.showToast("Cache limit exceeded");
+          }
+          this.cacheLimitExceeded = exceeded;
+        }
+
+        async checkCacheLimitStatus() {
+          if (document.visibilityState === "hidden") return;
+          try {
+            const res = await fetch("/api/status", { cache: "no-store" });
+            if (!res.ok) return;
+            this.updateCacheLimitStatus(await res.json());
+          } catch (_) {
+            // Status polling is best effort and must not affect playback.
+          }
+        }
+
+        startCacheLimitStatusPolling() {
+          if (this.cacheStatusTimer) return;
+          this.cacheStatusVisibilityHandler = () => {
+            if (document.visibilityState === "visible") {
+              this.checkCacheLimitStatus();
+            }
+          };
+          document.addEventListener(
+            "visibilitychange",
+            this.cacheStatusVisibilityHandler,
+          );
+          this.cacheStatusTimer = setInterval(
+            () => this.checkCacheLimitStatus(),
+            30000,
           );
         }
 
