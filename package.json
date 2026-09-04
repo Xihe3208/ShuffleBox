@@ -1,6 +1,6 @@
 {
   "name": "shufflebox",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "ShuffleBox SMB 短视频播放器",
   "main": "server.js",
   "scripts": {

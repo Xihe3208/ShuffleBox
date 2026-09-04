@@ -1,5 +1,5 @@
 Package: shufflebox
-Version: 1.1.0-1
+Version: 1.1.1-1
 Architecture: all
 Maintainer: ShuffleBox Maintainers <shufflebox@example.invalid>
 Depends: nodejs (>= 18), cifs-utils, ffmpeg, mount, systemd, init-system-helpers (>= 1.52~)
