@@ -941,6 +941,8 @@
           this.cacheStatusTimer = null;
           this.cacheLimitExceeded = null;
           this.cacheStatusVisibilityHandler = null;
+          this._appendPromise = null;
+          this._appendExhausted = false;
 
           this.dom = {};
           this.config.deviceName = this.getDeviceName();
@@ -1490,9 +1492,10 @@
             const { server, token, userId } = this.config;
             if (!server || !token) {
               if (!isAppend) this.showToast("Please config server first");
-              return;
+              return 0;
             }
 
+            if (!isAppend) this._appendExhausted = false;
             if (!isLoadMore && !isAppend) {
               this.state.startIndex = 0;
             }
@@ -1543,19 +1546,40 @@
               throw new Error(`Server Error: ${res.status}`);
             }
             let data = await res.json();
+            if (data && data.TotalRecordCount != null) {
+              const responseTotal = Number(data.TotalRecordCount);
+              if (responseTotal > 0) this.state.totalCount = responseTotal;
+            }
 
             if (data && data.Items && data.Items.length > 0) {
               if (isAppend) {
                 const startIndex = this.state.videos.length;
-                this.state.videos.push(...data.Items);
+                const existingIds = new Set(
+                  this.state.videos
+                    .map((video) => video?.Id)
+                    .filter((id) => id != null)
+                    .map((id) => String(id)),
+                );
+                const newItems = data.Items.filter((video) => {
+                  if (video?.Id == null) return true;
+                  const id = String(video.Id);
+                  if (existingIds.has(id)) return false;
+                  existingIds.add(id);
+                  return true;
+                });
+                if (!newItems.length) {
+                  this._appendExhausted = true;
+                  return 0;
+                }
+                this.state.videos.push(...newItems);
                 if (
                   this.state.playMode === "random" &&
                   this.state.originalVideos
                 ) {
-                  this.state.originalVideos.push(...data.Items);
+                  this.state.originalVideos.push(...newItems);
                 }
-                this.appendFeedItems(data.Items, startIndex);
-                return;
+                this.appendFeedItems(newItems, startIndex);
+                return newItems.length;
               } else {
                 this.state.videos = data.Items;
                 this.state.currentIndex = 0;
@@ -1574,9 +1598,10 @@
               }
             } else if (isLoadMore || isAppend) {
               if (!isAppend) this.showToast("No more videos");
+              if (isAppend) this._appendExhausted = true;
               this.state.startIndex = Math.max(0, this.state.startIndex || 0);
               this.toggleLoading(false);
-              return;
+              return 0;
             } else {
               this.showToast("No videos found");
               this.dom.videoContainer.innerHTML = "";
@@ -1586,6 +1611,7 @@
             this.showToast(
               "Cannot connect to server: " + (e.message || "Unknown error"),
             );
+            return 0;
           } finally {
             this.toggleLoading(false);
           }
@@ -2295,6 +2321,7 @@
           }
           this.feedActiveIndex = index;
           this.state.currentIndex = index;
+          this.maybeAppendVideos(index);
           this.updateFeedPosterLoading(index);
           this.state.playSessionId = "ex_" + Date.now().toString(16);
           this.state.isPlaying = false;
@@ -2617,6 +2644,41 @@
           this.switchSlide(this.state.currentIndex - 1, "down");
         }
 
+        maybeAppendVideos(index = this.state.currentIndex, force = false) {
+          if (this.state.viewMode !== "stream") return Promise.resolve(0);
+          if (this._appendPromise) return this._appendPromise;
+
+          const total = this.state.videos.length;
+          const totalCount = this.state.totalCount || 0;
+          if (
+            this._appendExhausted ||
+            (!force && index < total - 5) ||
+            (totalCount > 0 && total >= totalCount)
+          ) {
+            return Promise.resolve(0);
+          }
+
+          const request = this.fetchVideos(
+            null,
+            null,
+            false,
+            this.state.playMode === "random",
+            true,
+          );
+          const appendPromise = Promise.resolve(request)
+            .then((addedCount) => Number(addedCount) || 0)
+            .catch((error) => {
+              console.error("Failed to append videos:", error);
+              return 0;
+            })
+            .finally(() => {
+              if (this._appendPromise === appendPromise)
+                this._appendPromise = null;
+            });
+          this._appendPromise = appendPromise;
+          return appendPromise;
+        }
+
         switchSlide(newIndex) {
           if (
             this.state.viewMode !== "stream" ||
@@ -2625,6 +2687,7 @@
           )
             return;
 
+          this.maybeAppendVideos(newIndex);
           this.renderFeedWindow(newIndex);
           const target = this.getFeedItem(newIndex);
           const viewportHeight =
@@ -2632,23 +2695,6 @@
           const targetTop = target
             ? target.offsetTop
             : newIndex * viewportHeight;
-          if (
-            newIndex >= this.state.videos.length - 5 &&
-            this.state.videos.length < (this.state.totalCount || 999999)
-          ) {
-            if (!this._fetchingAppend) {
-              this._fetchingAppend = true;
-              this.fetchVideos(
-                null,
-                null,
-                false,
-                this.state.playMode === "random",
-                true,
-              ).finally(() => {
-                this._fetchingAppend = false;
-              });
-            }
-          }
           this.dom.videoContainer.scrollTo({
             top: targetTop,
             behavior: "smooth",
@@ -3188,12 +3234,31 @@
         }
 
         nextVideo() {
-          const nextIndex = this.state.currentIndex + 1;
-          if (nextIndex >= this.state.videos.length) {
-            this.showToast("You reached the last video");
+          const currentIndex = this.state.currentIndex;
+          const continueNext = () => {
+            if (this.state.currentIndex !== currentIndex) return;
+            const nextIndex = currentIndex + 1;
+            if (nextIndex >= this.state.videos.length) {
+              this.showToast("You reached the last video");
+              return;
+            }
+            this.switchSlide(nextIndex, "up");
+          };
+
+          const appendPromise = this.maybeAppendVideos(currentIndex);
+          if (this._appendPromise) {
+            appendPromise.then((addedCount) => {
+              if (
+                addedCount > 0 &&
+                this.state.currentIndex === currentIndex
+              )
+                this.nextVideo();
+              else continueNext();
+            });
             return;
           }
-          this.switchSlide(nextIndex, "up");
+
+          continueNext();
         }
 
         toggleViewMode() {
