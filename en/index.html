@@ -3664,13 +3664,27 @@
             }
           };
 
-          document.getElementById("progressBarContainer").onclick = (e) => {
-            e.stopPropagation();
-            const rect = e.currentTarget.getBoundingClientRect();
+          const progressBar = document.getElementById("progressBarContainer");
+          const seekToClientX = (clientX) => {
+            const rect = progressBar.getBoundingClientRect();
             const v = this.getVideoElement();
-            if (v && v.duration)
-              v.currentTime =
-                ((e.clientX - rect.left) / rect.width) * v.duration;
+            if (
+              !Number.isFinite(clientX) ||
+              !v ||
+              !Number.isFinite(v.duration) ||
+              v.duration <= 0 ||
+              rect.width <= 0
+            )
+              return;
+            const ratio = Math.max(
+              0,
+              Math.min(1, (clientX - rect.left) / rect.width),
+            );
+            v.currentTime = ratio * v.duration;
+          };
+          progressBar.onclick = (e) => {
+            e.stopPropagation();
+            seekToClientX(e.clientX);
           };
 
           const container = document.getElementById("app");
@@ -4012,6 +4026,11 @@
           let targetTime = 0;
           let originalTime = 0;
           let gestureActive = false;
+          let progressInteraction = false;
+
+          const isProgressBarTarget = (target) =>
+            target && typeof target.closest === "function" &&
+            target.closest("#progressBarContainer");
 
           container.style.touchAction = "pan-y";
           container.style.userSelect = "none";
@@ -4025,7 +4044,28 @@
           document.getElementById("app").appendChild(speedToast);
           lucide.createIcons();
 
+          const cancelGesture = () => {
+            if (state === "SPEED") {
+              const v = this.getVideoElement();
+              if (v) v.playbackRate = 1.0;
+              speedToast.classList.add("opacity-0");
+            }
+            gestureActive = false;
+            state = "IDLE";
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+            clearTimeout(clickTimer);
+            clickTimer = null;
+            clickCount = 0;
+          };
+
           const startHandler = (e) => {
+            if (isProgressBarTarget(e.target)) {
+              progressInteraction = true;
+              cancelGesture();
+              return;
+            }
+            progressInteraction = false;
             if (this.state.viewMode !== "stream") {
               gestureActive = false;
               return;
@@ -4068,7 +4108,12 @@
           };
 
           const moveHandler = (e) => {
-            if (!gestureActive || this.state.viewMode !== "stream") return;
+            if (
+              progressInteraction ||
+              !gestureActive ||
+              this.state.viewMode !== "stream"
+            )
+              return;
             const t = e.touches ? e.touches[0] : e;
             const diffX = t.clientX - x0;
             const diffY = t.clientY - y0;
@@ -4107,6 +4152,11 @@
           };
 
           const endHandler = (e) => {
+            if (progressInteraction) {
+              progressInteraction = false;
+              cancelGesture();
+              return;
+            }
             if (!gestureActive || this.state.viewMode !== "stream") return;
             gestureActive = false;
             clearTimeout(longPressTimer);
@@ -4187,9 +4237,8 @@
             endHandler(e);
           });
           container.addEventListener("touchcancel", () => {
-            gestureActive = false;
-            state = "IDLE";
-            clearTimeout(longPressTimer);
+            progressInteraction = false;
+            cancelGesture();
             speedToast.classList.add("opacity-0");
           });
 
