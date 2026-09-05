@@ -1,3 +1,9 @@
+shufflebox (1.1.2-1) unstable; urgency=medium
+
+  * Prevent mobile progress-bar taps from toggling video playback.
+
+ -- ShuffleBox Maintainers <shufflebox@example.invalid>  Sat, 05 Sep 2026 00:00:00 +0000
+
 shufflebox (1.1.1-1) unstable; urgency=medium
 
   * Continue loading videos automatically after the initial page.

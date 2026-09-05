@@ -40,10 +40,10 @@ cd /opt/shullfebox/ShuffleBox
 ./debian/build-deb.sh /root
 ```
 
-输出示例：`/root/shufflebox_1.1.1-1_all.deb`。安装本地包：
+输出示例：`/root/shufflebox_1.1.2-1_all.deb`。安装本地包：
 
 ```bash
-apt install ./shufflebox_1.1.1-1_all.deb
+apt install ./shufflebox_1.1.2-1_all.deb
 ```
 
 安装脚本会创建配置、数据目录、挂载点，启用并启动 `shufflebox.service`。重新
@@ -168,8 +168,8 @@ HLS 启动阶段会等待播放列表准备完成后再进入空闲回收计时�
 
 ```bash
 ./debian/build-deb.sh /root
-dpkg-deb -I /root/shufflebox_1.1.1-1_all.deb
-dpkg-deb -c /root/shufflebox_1.1.1-1_all.deb
+dpkg-deb -I /root/shufflebox_1.1.2-1_all.deb
+dpkg-deb -c /root/shufflebox_1.1.2-1_all.deb
 sh -n bin/shufflebox debian/build-deb.sh debian/shufflebox.preinst \
   debian/shufflebox.postinst debian/shufflebox.prerm debian/shufflebox.postrm
 node --check server.js
